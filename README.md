@@ -20,6 +20,11 @@ Both apps can be run independently using Docker.
 
 ### 1. Clone the repository
 
+
+```bash
+git clone https://github.com/TediVirag/AI-sound-generation.git
+```
+
 ### 2. Build and Run the Apps
 
 #### **Additive Synthesis App**
