@@ -12,6 +12,7 @@ Both apps can be run independently using Docker.
 ## Requirements
 
 - [Docker](https://docs.docker.com/get-started/get-docker/) installed on your system
+- Docker deamon is running
 
 ---
 
