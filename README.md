@@ -3,7 +3,7 @@
 This repository contains two interactive Streamlit apps for additive sound synthesis and testing:
 
 - **additive_synthesis.py**: An app that allows mixing multiple sine waves together(additive synthesis).
-- **sound_test.py**: An app for creating sound with a greater variety of parameters(can't mix multiple sine waves though).
+- **sound_test.py**: An app for creating sound with a greater variety of parameters, but can't mix multiple sine waves.
 
 Both apps can be run independently using Docker.
 
@@ -12,12 +12,18 @@ Both apps can be run independently using Docker.
 ## Requirements
 
 - [Docker](https://docs.docker.com/get-started/get-docker/) installed on your system
+- Docker deamon is running
 
 ---
 
 ## Getting Started
 
 ### 1. Clone the repository
+
+
+```bash
+git clone https://github.com/TediVirag/AI-sound-generation.git
+```
 
 ### 2. Build and Run the Apps
 
@@ -65,8 +71,8 @@ Open your browser and go to:
 ├── additive_synthesis.py
 ├── sound_test.py
 ├── requirements.txt
-├── Dockerfile.additive
-├── Dockerfile.soundtest
+├── dockerfile.synthesis
+├── dockerfile.test
 └── README.md
 ```
 
