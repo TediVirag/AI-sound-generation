@@ -32,7 +32,7 @@ docker build -f dockerfile.synthesis -t additive-synth-app .
 Run the app:
 
 ```bash
-docker run -p 8501:8501 additive-synth-app
+docker run -p 7860:7860 additive-synth-app
 ```
 
 #### **Sound Test App**

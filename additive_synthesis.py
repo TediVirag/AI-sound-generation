@@ -1,11 +1,9 @@
-import streamlit as st
+import gradio as gr
 import numpy as np
 from scipy.io import wavfile
 from scipy.signal import butter, lfilter, spectrogram
 import matplotlib.pyplot as plt
-import io
-
-st.set_page_config(layout="wide")
+import tempfile
 
 def bandpass_filter(data, center_freq, bandwidth, fs, order=2):
     nyq = 0.5 * fs
@@ -46,94 +44,294 @@ def envelope(t, attack_ms, decay_ms, total_ms):
     # Sustain is already 1
     return env
 
+def get_default_frequency(partial_idx):
+    """Calculate default frequency for a partial, ensuring it stays within bounds"""
+    base_freq = 220 * (partial_idx + 1)
+    return min(base_freq, 2000)  # Cap at 2000 Hz maximum
 
-st.title("Additive Vocal Synthesis with Formants")
+def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants, 
+                    # Partial parameters (20 partials * 7 params each)
+                    *partial_and_formant_params):
+    
+    # Map sample rate index to actual value
+    sample_rates = [32000, 44100, 48000]
+    sample_rate = sample_rates[sample_rate_idx]
+    
+    # Extract partial parameters (20 partials * 7 parameters each = 140 params)
+    partials = []
+    for i in range(20):
+        if i < num_partials:
+            base_idx = i * 7
+            freq = partial_and_formant_params[base_idx]
+            amp = partial_and_formant_params[base_idx + 1]
+            attack = partial_and_formant_params[base_idx + 2]
+            decay = partial_and_formant_params[base_idx + 3]
+            vibrato = partial_and_formant_params[base_idx + 4]
+            vib_rate = partial_and_formant_params[base_idx + 5] if vibrato else 0
+            vib_depth = partial_and_formant_params[base_idx + 6] if vibrato else 0
+            
+            partials.append({
+                'freq': freq,
+                'amp': amp,
+                'attack': attack,
+                'decay': decay,
+                'vibrato': vibrato,
+                'vib_rate': vib_rate,
+                'vib_depth': vib_depth
+            })
+    
+    # Extract formant parameters (5 formants * 2 params each = 10 params)
+    formant_freqs = []
+    formant_bandwidths = []
+    formant_start_idx = 140  # After 20 partials * 7 params
+    
+    for i in range(5):
+        if i < num_formants:
+            f_freq = partial_and_formant_params[formant_start_idx + i * 2]
+            f_bw = partial_and_formant_params[formant_start_idx + i * 2 + 1]
+            formant_freqs.append(f_freq)
+            formant_bandwidths.append(f_bw)
+    
+    # Synthesize audio
+    audio_data = additive_sines_with_vibrato_and_envelope(partials, duration, sample_rate)
+    for f, bw in zip(formant_freqs, formant_bandwidths):
+        audio_data = bandpass_filter(audio_data, f, bw, sample_rate)
+    
+    # Normalize
+    max_abs = np.max(np.abs(audio_data))
+    if max_abs > 0:
+        audio_data = audio_data / max_abs
+    audio_int16 = np.int16(audio_data * 32767)
+    total_duration = len(audio_int16) / sample_rate
+    
+    # Create spectrogram
+    f_spec, t_spec, Sxx = spectrogram(audio_int16.astype(float), fs=sample_rate, nperseg=1024)
+    dominant_freqs = f_spec[np.argmax(Sxx, axis=0)]
+    
+    # Create plot
+    plt.close('all')  # Close any existing plots
+    fig, ax = plt.subplots(figsize=(14, 4))
+    pcm = ax.pcolormesh(t_spec, f_spec, 10 * np.log10(Sxx + 1e-10), shading='gouraud')
+    fig.colorbar(pcm, ax=ax, label='dB')
+    ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
+    ax.set_ylabel('Frequency [Hz]')
+    ax.set_xlabel('Time [sec]')
+    ax.set_title('Spectrogram (with Dominant Frequency)')
+    ax.set_ylim(0, 5000)
+    ax.legend()
+    
+    tick_interval = 0.25
+    xticks = np.arange(0, total_duration, tick_interval)
+    if not np.isclose(xticks[-1], total_duration):
+        xticks = np.append(xticks, total_duration)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels([f"{tick:.2f}" for tick in xticks])
+    
+    # Save audio to temporary file
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+    wavfile.write(temp_file.name, sample_rate, audio_int16)
+    temp_file.close()
+    
+    return fig, temp_file.name
 
-# 1. Global controls
-sample_rate = st.selectbox("Sample Rate (Hz)", [32000, 44100, 48000], index=1)
-duration = st.slider("Total Duration (ms)", 100, 5000, 1000, step=100)
+def create_interface():
+    with gr.Blocks(title="Additive Vocal Synthesis with Formants", css=".gradio-container {max-width: none !important}") as demo:
+        gr.Markdown("# Additive Vocal Synthesis with Formants")
+        
+        # Global controls
+        with gr.Row():
+            with gr.Column(scale=1):
+                sample_rate = gr.Dropdown(
+                    choices=["32000 Hz", "44100 Hz", "48000 Hz"],
+                    value="44100 Hz",
+                    label="Sample Rate",
+                    type="index"
+                )
+                duration = gr.Slider(
+                    minimum=100,
+                    maximum=5000,
+                    value=1000,
+                    step=100,
+                    label="Total Duration (ms)"
+                )
+                num_partials = gr.Slider(
+                    minimum=1,
+                    maximum=20,
+                    value=3,
+                    step=1,
+                    label="Number of Partials (Sines)"
+                )
+                num_formants = gr.Slider(
+                    minimum=1,
+                    maximum=5,
+                    value=2,
+                    step=1,
+                    label="Number of Formants"
+                )
+        
+        # Partial controls - organized in rows of 5 columns each
+        gr.Markdown("## Partial Parameters")
+        
+        partial_components = []
+        partial_column_components = []
+        
+        # Create 4 rows of 5 columns each for 20 partials
+        for row in range(4):
+            with gr.Row() as partial_row:
+                row_columns = []
+                for col in range(5):
+                    partial_idx = row * 5 + col
+                    visible = partial_idx < 3  # Initially show first 3
+                    
+                    with gr.Column(visible=visible, scale=1) as column_comp:
+                        gr.Markdown(f"**Partial {partial_idx + 1}**")
+                        
+                        freq = gr.Slider(
+                            minimum=50,
+                            maximum=2000,
+                            value=get_default_frequency(partial_idx),  # Fixed default frequency
+                            step=10,
+                            label=f"Frequency (Hz)"
+                        )
+                        amp = gr.Slider(
+                            minimum=0.05,
+                            maximum=1.0,
+                            value=0.5,
+                            step=0.05,
+                            label=f"Amplitude"
+                        )
+                        attack = gr.Slider(
+                            minimum=0,
+                            maximum=1000,
+                            value=50,
+                            step=10,
+                            label=f"Attack (ms)"
+                        )
+                        decay = gr.Slider(
+                            minimum=0,
+                            maximum=1000,
+                            value=200,
+                            step=10,
+                            label=f"Decay (ms)"
+                        )
+                        vibrato = gr.Checkbox(label="Vibrato", value=False)
+                        vib_rate = gr.Slider(
+                            minimum=1,
+                            maximum=20,
+                            value=5,
+                            step=1,
+                            label="Vib Rate",
+                            visible=False
+                        )
+                        vib_depth = gr.Slider(
+                            minimum=1,
+                            maximum=200,
+                            value=20,
+                            step=1,
+                            label="Vib Depth (Hz)",
+                            visible=False
+                        )
+                        
+                        # Store components for this partial
+                        partial_components.extend([freq, amp, attack, decay, vibrato, vib_rate, vib_depth])
+                        row_columns.append(column_comp)
+                        
+                        # Show/hide vibrato controls
+                        vibrato.change(
+                            fn=lambda x: (gr.update(visible=x), gr.update(visible=x)),
+                            inputs=[vibrato],
+                            outputs=[vib_rate, vib_depth]
+                        )
+                
+                partial_column_components.extend(row_columns)
+        
+        # Formant controls
+        gr.Markdown("## Formant Parameters")
+        formant_components = []
+        formant_row_components = []
+        
+        for i in range(5):
+            visible = i < 2  # Initially show first 2
+            with gr.Row(visible=visible) as formant_row:
+                with gr.Column():
+                    gr.Markdown(f"**Formant {i + 1}**")
+                    f_freq = gr.Slider(
+                        minimum=200,
+                        maximum=4000,
+                        value=500 + 500 * i,
+                        step=10,
+                        label=f"Frequency (Hz)"
+                    )
+                    f_bw = gr.Slider(
+                        minimum=50,
+                        maximum=1000,
+                        value=200,
+                        step=10,
+                        label=f"Bandwidth (Hz)"
+                    )
+                    formant_components.extend([f_freq, f_bw])
+                    formant_row_components.append(formant_row)
+        
+        # Output section
+        gr.Markdown("## Output")
+        with gr.Row():
+            with gr.Column():
+                plot_output = gr.Plot(label="Spectrogram")
+                audio_output = gr.Audio(label="Generated Audio", type="filepath")
+        
+        # Dynamic UI update functions
+        def update_partial_visibility(num_partials_val):
+            updates = []
+            for i in range(20):
+                updates.append(gr.update(visible=(i < num_partials_val)))
+            return updates
+        
+        def update_formant_visibility(num_formants_val):
+            updates = []
+            for i in range(5):
+                updates.append(gr.update(visible=(i < num_formants_val)))
+            return updates
+        
+        # Connect dynamic visibility updates
+        num_partials.change(
+            fn=update_partial_visibility,
+            inputs=[num_partials],
+            outputs=partial_column_components
+        )
+        
+        num_formants.change(
+            fn=update_formant_visibility,
+            inputs=[num_formants],
+            outputs=formant_row_components
+        )
+        
+        # Collect all inputs for synthesis
+        all_inputs = [sample_rate, duration, num_partials, num_formants]
+        all_inputs.extend(partial_components)  # 20 partials * 7 params = 140
+        all_inputs.extend(formant_components)  # 5 formants * 2 params = 10
+        
+        # Auto-synthesize on any parameter change
+        def setup_auto_synthesis():
+            for component in [sample_rate, duration, num_partials, num_formants] + partial_components + formant_components:
+                component.change(
+                    fn=synthesize_audio,
+                    inputs=all_inputs,
+                    outputs=[plot_output, audio_output]
+                )
+        
+        # Initial synthesis when the interface loads
+        demo.load(
+            fn=synthesize_audio,
+            inputs=all_inputs,
+            outputs=[plot_output, audio_output]
+        )
+        
+        # Set up auto-synthesis
+        setup_auto_synthesis()
+    
+    return demo
 
-# 2. Partial (sine) controls
-num_partials = st.slider("Number of Partials (Sines)", 1, 8, 3)
-partial_cols = st.columns(num_partials)
-partials = []
-for i, col in enumerate(partial_cols):
-    with col:
-        st.markdown(f"**Partial {i+1}**")
-        freq = st.slider(f"Frequency {i+1} (Hz)", 50, 2000, 220*(i+1), step=10, key=f"freq_{i}")
-        amp = st.slider(f"Amplitude {i+1}", 0.05, 1.0, 0.5, step=0.05, key=f"amp_{i}")
-        attack = st.slider(f"Attack {i+1} (ms)", 0, 1000, 50, step=10, key=f"attack_{i}")
-        decay = st.slider(f"Decay {i+1} (ms)", 0, 1000, 200, step=10, key=f"decay_{i}")
-        vibrato = st.checkbox(f"Vibrato", key=f"vib_{i}")
-        if vibrato:
-            vib_rate = st.slider(f"Vib Rate", 1, 20, 5, key=f"vib_rate_{i}")
-            vib_depth = st.slider(f"Vib Depth (Hz)", 1, 200, 20, key=f"vib_depth_{i}")
-        else:
-            vib_rate = 0
-            vib_depth = 0
-        partials.append({
-            'freq': freq,
-            'amp': amp,
-            'attack': attack,
-            'decay': decay,
-            'vibrato': vibrato,
-            'vib_rate': vib_rate,
-            'vib_depth': vib_depth
-        })
-
-
-# 3. Formant controls
-num_formants = st.slider("Number of Formants", 1, 5, 2)
-formant_freqs = []
-formant_bandwidths = []
-for i in range(num_formants):
-    st.markdown(f"**Formant {i+1}**")
-    f = st.slider(f"Formant {i+1} Frequency (Hz)", 200, 4000, 500 + 500*i, step=10, key=f"formant_freq_{i}")
-    bw = st.slider(f"Formant {i+1} Bandwidth (Hz)", 50, 1000, 200, step=10, key=f"formant_bw_{i}")
-    formant_freqs.append(f)
-    formant_bandwidths.append(bw)
-
-# 4. Synthesize
-audio_data = additive_sines_with_vibrato_and_envelope(partials, duration, sample_rate)
-for f, bw in zip(formant_freqs, formant_bandwidths):
-    audio_data = bandpass_filter(audio_data, f, bw, sample_rate)
-
-# 5. Normalize and output
-max_abs = np.max(np.abs(audio_data))
-if max_abs > 0:
-    audio_data = audio_data / max_abs
-audio_int16 = np.int16(audio_data * 32767)
-total_duration = len(audio_int16) / sample_rate
-
-# 6. Spectrogram and audio player
-tick_interval = 0.25
-xticks = np.arange(0, total_duration, tick_interval)
-if not np.isclose(xticks[-1], total_duration):
-    xticks = np.append(xticks, total_duration)
-
-f, t_spec, Sxx = spectrogram(audio_int16.astype(float), fs=sample_rate, nperseg=1024)
-dominant_freqs = f[np.argmax(Sxx, axis=0)]
-
-fig, ax = plt.subplots(figsize=(14, 4))
-pcm = ax.pcolormesh(t_spec, f, 10 * np.log10(Sxx + 1e-10), shading='gouraud')
-fig.colorbar(pcm, ax=ax, label='dB')
-ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
-ax.set_ylabel('Frequency [Hz]')
-ax.set_xlabel('Time [sec]')
-ax.set_title('Spectrogram (with Dominant Frequency)')
-ax.set_ylim(0, 5000)
-ax.legend()
-ax.set_xticks(xticks)
-ax.set_xticklabels([f"{tick:.2f}" for tick in xticks])
-st.pyplot(fig)
-
-buf = io.BytesIO()
-wavfile.write(buf, sample_rate, audio_int16)
-st.audio(buf.getvalue(), format='audio/wav')
-
-st.download_button(
-    label="Save as WAV",
-    data=buf.getvalue(),
-    file_name="synthesized_vocal.wav",
-    mime="audio/wav"
-)
+# Launch the app
+if __name__ == "__main__":
+    demo = create_interface()
+    demo.launch(share=False, server_name="0.0.0.0", server_port=7860)
