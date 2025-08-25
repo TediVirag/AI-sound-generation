@@ -4,6 +4,8 @@ from scipy.io import wavfile
 from scipy.signal import butter, lfilter, spectrogram
 import matplotlib.pyplot as plt
 import tempfile
+import json
+import os
 
 def bandpass_filter(data, center_freq, bandwidth, fs, order=2):
     nyq = 0.5 * fs
@@ -48,6 +50,107 @@ def get_default_frequency(partial_idx):
     """Calculate default frequency for a partial, ensuring it stays within bounds"""
     base_freq = 220 * (partial_idx + 1)
     return min(base_freq, 2000)  # Cap at 2000 Hz maximum
+
+def export_parameters(sample_rate_idx, duration, num_partials, num_formants, *all_params):
+    """Export all parameters to a JSON file"""
+    try:
+        # Extract sample rate value
+        sample_rates = [32000, 44100, 48000]
+        sample_rate_value = sample_rates[sample_rate_idx]
+        
+        # Organize parameters
+        parameters = {
+            "global": {
+                "sample_rate": sample_rate_value,
+                "sample_rate_idx": sample_rate_idx,
+                "duration": duration,
+                "num_partials": num_partials,
+                "num_formants": num_formants
+            },
+            "partials": [],
+            "formants": []
+        }
+        
+        # Extract partial parameters (20 partials * 7 params each)
+        for i in range(20):
+            base_idx = i * 7
+            partial_data = {
+                "freq": all_params[base_idx],
+                "amp": all_params[base_idx + 1],
+                "attack": all_params[base_idx + 2],
+                "decay": all_params[base_idx + 3],
+                "vibrato": all_params[base_idx + 4],
+                "vib_rate": all_params[base_idx + 5],
+                "vib_depth": all_params[base_idx + 6]
+            }
+            parameters["partials"].append(partial_data)
+        
+        # Extract formant parameters (5 formants * 2 params each)
+        formant_start_idx = 140
+        for i in range(5):
+            formant_data = {
+                "freq": all_params[formant_start_idx + i * 2],
+                "bandwidth": all_params[formant_start_idx + i * 2 + 1]
+            }
+            parameters["formants"].append(formant_data)
+        
+        # Create a temporary file for download
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', prefix='synthesis_params_')
+        json.dump(parameters, temp_file, indent=2)
+        temp_file.close()
+        
+        return temp_file.name, "Parameters exported successfully!"
+        
+    except Exception as e:
+        return None, f"Export failed: {str(e)}"
+
+def import_parameters(file_path):
+    """Import parameters from a JSON file and return update values for all components"""
+    try:
+        if file_path is None:
+            return [gr.update() for _ in range(154)] + ["Please select a file to import."]
+        
+        with open(file_path, 'r') as f:
+            parameters = json.load(f)
+        
+        # Prepare updates list for all components
+        updates = []
+        
+        # Global parameters updates
+        sample_rates = ["32000 Hz", "44100 Hz", "48000 Hz"]
+        sample_rate_idx = parameters["global"]["sample_rate_idx"]
+        # Convert index to actual dropdown choice string
+        sample_rate_choice = sample_rates[sample_rate_idx]
+        updates.append(gr.update(value=sample_rate_choice))  # sample_rate dropdown
+        updates.append(gr.update(value=parameters["global"]["duration"]))  # duration
+        updates.append(gr.update(value=parameters["global"]["num_partials"]))  # num_partials
+        updates.append(gr.update(value=parameters["global"]["num_formants"]))  # num_formants
+        
+        # Partial parameters updates (20 partials * 7 params = 140 updates)
+        for i in range(20):
+            partial = parameters["partials"][i]
+            updates.append(gr.update(value=partial["freq"]))
+            updates.append(gr.update(value=partial["amp"]))
+            updates.append(gr.update(value=partial["attack"]))
+            updates.append(gr.update(value=partial["decay"]))
+            updates.append(gr.update(value=partial["vibrato"]))
+            updates.append(gr.update(value=partial["vib_rate"]))
+            updates.append(gr.update(value=partial["vib_depth"]))
+        
+        # Formant parameters updates (5 formants * 2 params = 10 updates)
+        for i in range(5):
+            formant = parameters["formants"][i]
+            updates.append(gr.update(value=formant["freq"]))
+            updates.append(gr.update(value=formant["bandwidth"]))
+        
+        # Success message
+        updates.append("Parameters imported successfully!")
+        
+        return updates
+        
+    except Exception as e:
+        # Return no updates and error message
+        return [gr.update() for _ in range(154)] + [f"Import failed: {str(e)}"]
 
 def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants, 
                     # Partial parameters (20 partials * 7 params each)
@@ -137,6 +240,31 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
 def create_interface():
     with gr.Blocks(title="Additive Vocal Synthesis with Formants", css=".gradio-container {max-width: none !important}") as demo:
         gr.Markdown("# Additive Vocal Synthesis with Formants")
+        
+        # Export/Import section
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("## Parameter Management")
+                with gr.Row():
+                    export_btn = gr.Button("Export Parameters", variant="secondary")
+                    import_btn = gr.Button("Import Parameters", variant="secondary")
+                
+                import_file = gr.File(
+                    label="Select parameter file to import",
+                    file_types=[".json"],
+                    visible=False
+                )
+                
+                download_file = gr.File(
+                    label="Download Parameters",
+                    visible=False
+                )
+                
+                status_msg = gr.Textbox(
+                    label="Status",
+                    interactive=False,
+                    visible=False
+                )
         
         # Global controls
         with gr.Row():
@@ -305,10 +433,42 @@ def create_interface():
             outputs=formant_row_components
         )
         
-        # Collect all inputs for synthesis
+        # Collect all inputs for synthesis and export/import
         all_inputs = [sample_rate, duration, num_partials, num_formants]
         all_inputs.extend(partial_components)  # 20 partials * 7 params = 140
         all_inputs.extend(formant_components)  # 5 formants * 2 params = 10
+        
+        # All components for updates (154 total: 4 global + 140 partial + 10 formant)
+        all_components = [sample_rate, duration, num_partials, num_formants] + partial_components + formant_components
+        
+        # Export functionality
+        def handle_export(*args):
+            file_path, message = export_parameters(*args)
+            if file_path:
+                return gr.update(value=file_path, visible=True), gr.update(value=message, visible=True)
+            else:
+                return gr.update(visible=False), gr.update(value=message, visible=True)
+        
+        export_btn.click(
+            fn=handle_export,
+            inputs=all_inputs,
+            outputs=[download_file, status_msg]
+        )
+        
+        # Import functionality  
+        def show_import_file():
+            return gr.update(visible=True), gr.update(visible=True)
+        
+        import_btn.click(
+            fn=show_import_file,
+            outputs=[import_file, status_msg]
+        )
+        
+        import_file.change(
+            fn=import_parameters,
+            inputs=[import_file],
+            outputs=all_components + [status_msg]
+        )
         
         # Auto-synthesize on any parameter change
         def setup_auto_synthesis():
