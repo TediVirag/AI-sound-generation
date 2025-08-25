@@ -234,7 +234,7 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
         ax.set_ylabel('Frequency [Hz]')
         ax.set_xlabel('Time [sec]')
         ax.set_title('Spectrogram (with Dominant Frequency)')
-        ax.set_ylim(0, 5000)
+        ax.set_ylim(0, 10000)
         ax.legend()
         
         tick_interval = 0.25
@@ -263,7 +263,6 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     temp_file.close()
     
     # Return the figure (Gradio will handle its lifecycle)
-    # Note: Don't close the figure here as Gradio needs it for display
     return fig, temp_file.name
 
 def create_interface():
@@ -345,8 +344,8 @@ def create_interface():
                         
                         freq = gr.Slider(
                             minimum=50,
-                            maximum=2000,
-                            value=get_default_frequency(partial_idx),  # Fixed default frequency
+                            maximum=10000,
+                            value=get_default_frequency(partial_idx),
                             step=10,
                             label=f"Frequency (Hz)"
                         )
@@ -374,7 +373,7 @@ def create_interface():
                         vibrato = gr.Checkbox(label="Vibrato", value=False)
                         vib_rate = gr.Slider(
                             minimum=1,
-                            maximum=20,
+                            maximum=40,
                             value=5,
                             step=1,
                             label="Vib Rate",
@@ -382,7 +381,7 @@ def create_interface():
                         )
                         vib_depth = gr.Slider(
                             minimum=1,
-                            maximum=200,
+                            maximum=300,
                             value=20,
                             step=1,
                             label="Vib Depth (Hz)",
@@ -414,7 +413,7 @@ def create_interface():
                     gr.Markdown(f"**Formant {i + 1}**")
                     f_freq = gr.Slider(
                         minimum=200,
-                        maximum=4000,
+                        maximum=8000,
                         value=500 + 500 * i,
                         step=10,
                         label=f"Frequency (Hz)"
