@@ -8,8 +8,10 @@ import matplotlib.pyplot as plt
 import tempfile
 import json
 import os
-import io
-import base64
+import gc
+
+# Set matplotlib to close figures automatically
+plt.rcParams['figure.max_open_warning'] = 0
 
 def bandpass_filter(data, center_freq, bandwidth, fs, order=2):
     nyq = 0.5 * fs
@@ -160,6 +162,10 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
                     # Partial parameters (20 partials * 7 params each)
                     *partial_and_formant_params):
     
+    # Clean up any existing figures before creating new ones
+    plt.close('all')
+    gc.collect()  # Force garbage collection
+    
     # Map sample rate index to actual value
     sample_rates = [32000, 44100, 48000]
     sample_rate = sample_rates[sample_rate_idx]
@@ -215,9 +221,10 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     f_spec, t_spec, Sxx = spectrogram(audio_int16.astype(float), fs=sample_rate, nperseg=1024)
     dominant_freqs = f_spec[np.argmax(Sxx, axis=0)]
     
-    # Create plot with proper cleanup
+    # Create plot with proper memory management
+    fig = None
     try:
-        # Create a new figure explicitly
+        # Create a new figure with explicit cleanup
         fig = plt.figure(figsize=(14, 4))
         ax = fig.add_subplot(111)
         
@@ -243,7 +250,10 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     except Exception as e:
         print(f"Plot creation error: {e}")
         # Create a simple fallback plot
-        fig, ax = plt.subplots(figsize=(8, 4))
+        if fig:
+            plt.close(fig)
+        fig = plt.figure(figsize=(8, 4))
+        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, f'Plot Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)
         ax.set_title('Spectrogram (Error in generation)')
     
@@ -252,6 +262,8 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     wavfile.write(temp_file.name, sample_rate, audio_int16)
     temp_file.close()
     
+    # Return the figure (Gradio will handle its lifecycle)
+    # Note: Don't close the figure here as Gradio needs it for display
     return fig, temp_file.name
 
 def create_interface():
