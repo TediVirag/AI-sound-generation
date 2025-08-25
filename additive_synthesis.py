@@ -2,10 +2,14 @@ import gradio as gr
 import numpy as np
 from scipy.io import wavfile
 from scipy.signal import butter, lfilter, spectrogram
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import tempfile
 import json
 import os
+import io
+import base64
 
 def bandpass_filter(data, center_freq, bandwidth, fs, order=2):
     nyq = 0.5 * fs
@@ -211,24 +215,37 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     f_spec, t_spec, Sxx = spectrogram(audio_int16.astype(float), fs=sample_rate, nperseg=1024)
     dominant_freqs = f_spec[np.argmax(Sxx, axis=0)]
     
-    # Create plot
-    plt.close('all')  # Close any existing plots
-    fig, ax = plt.subplots(figsize=(14, 4))
-    pcm = ax.pcolormesh(t_spec, f_spec, 10 * np.log10(Sxx + 1e-10), shading='gouraud')
-    fig.colorbar(pcm, ax=ax, label='dB')
-    ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
-    ax.set_ylabel('Frequency [Hz]')
-    ax.set_xlabel('Time [sec]')
-    ax.set_title('Spectrogram (with Dominant Frequency)')
-    ax.set_ylim(0, 5000)
-    ax.legend()
-    
-    tick_interval = 0.25
-    xticks = np.arange(0, total_duration, tick_interval)
-    if not np.isclose(xticks[-1], total_duration):
-        xticks = np.append(xticks, total_duration)
-    ax.set_xticks(xticks)
-    ax.set_xticklabels([f"{tick:.2f}" for tick in xticks])
+    # Create plot with proper cleanup
+    try:
+        # Create a new figure explicitly
+        fig = plt.figure(figsize=(14, 4))
+        ax = fig.add_subplot(111)
+        
+        pcm = ax.pcolormesh(t_spec, f_spec, 10 * np.log10(Sxx + 1e-10), shading='gouraud')
+        fig.colorbar(pcm, ax=ax, label='dB')
+        ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
+        ax.set_ylabel('Frequency [Hz]')
+        ax.set_xlabel('Time [sec]')
+        ax.set_title('Spectrogram (with Dominant Frequency)')
+        ax.set_ylim(0, 5000)
+        ax.legend()
+        
+        tick_interval = 0.25
+        xticks = np.arange(0, total_duration, tick_interval)
+        if not np.isclose(xticks[-1], total_duration):
+            xticks = np.append(xticks, total_duration)
+        ax.set_xticks(xticks)
+        ax.set_xticklabels([f"{tick:.2f}" for tick in xticks])
+        
+        # Make sure the plot is ready
+        plt.tight_layout()
+        
+    except Exception as e:
+        print(f"Plot creation error: {e}")
+        # Create a simple fallback plot
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, f'Plot Error: {str(e)}', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Spectrogram (Error in generation)')
     
     # Save audio to temporary file
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
