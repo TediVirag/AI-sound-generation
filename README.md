@@ -1,9 +1,9 @@
 # AI sound generation 
 
-This repository contains two interactive Streamlit apps for additive sound synthesis and testing:
+This repository contains two interactive apps for additive sound synthesis and sound testing:
 
-- **additive_synthesis.py**: An app that allows mixing multiple sine waves together(additive synthesis).
-- **sound_test.py**: An app for creating sound with a greater variety of parameters, but can't mix multiple sine waves.
+- **additive_synthesis.py**: A Gradio app that allows mixing multiple sine waves together(additive synthesis).
+- **sound_test.py**: A Streamlit app for creating sound with a greater variety of parameters, but can't mix multiple sine waves.
 
 Both apps can be run independently using Docker.
 
@@ -86,5 +86,6 @@ Open your browser and go to:
 
 ## Acknowledgments
 
+- Built with [Gradio](https://gradio.app/) for the interactive web interface
 - Built with [Streamlit](https://streamlit.io/)
 - Uses [NumPy](https://numpy.org/), [SciPy](https://scipy.org/), and [Matplotlib](https://matplotlib.org/)
