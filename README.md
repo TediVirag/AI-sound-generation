@@ -2,7 +2,7 @@
 
 This repository contains two interactive apps for additive sound synthesis and sound testing:
 
-- **additive_synthesis.py**: A Gradio app that allows mixing multiple sine waves together(additive synthesis).
+- **additive_synthesis.py**: A Gradio app that allows mixing multiple sine waves together(additive synthesis) and concatenating up to 6 different sounds.
 - **sound_test.py**: A Streamlit app for creating sound with a greater variety of parameters, but can't mix multiple sine waves.
 
 Both apps can be run independently using Docker.

@@ -57,6 +57,283 @@ def get_default_frequency(partial_idx):
     base_freq = 220 * (partial_idx + 1)
     return min(base_freq, 2000)  # Cap at 2000 Hz maximum
 
+def synthesize_single_sound(parameters):
+    """Synthesize a single sound from parameters dictionary"""
+    # Extract parameters
+    sample_rate = parameters["global"]["sample_rate"]
+    duration = parameters["global"]["duration"]
+    num_partials = parameters["global"]["num_partials"]
+    num_formants = parameters["global"]["num_formants"]
+    
+    # Build partials list
+    partials = []
+    for i in range(num_partials):
+        if i < len(parameters["partials"]):
+            p = parameters["partials"][i]
+            partials.append({
+                'freq': p['freq'],
+                'amp': p['amp'],
+                'attack': p['attack'],
+                'decay': p['decay'],
+                'vibrato': p['vibrato'],
+                'vib_rate': p['vib_rate'] if p['vibrato'] else 0,
+                'vib_depth': p['vib_depth'] if p['vibrato'] else 0
+            })
+    
+    # Synthesize audio
+    audio_data = additive_sines_with_vibrato_and_envelope(partials, duration, sample_rate)
+    
+    # Apply formants
+    for i in range(num_formants):
+        if i < len(parameters["formants"]):
+            f = parameters["formants"][i]
+            audio_data = bandpass_filter(audio_data, f['freq'], f['bandwidth'], sample_rate)
+    
+    # Normalize
+    max_abs = np.max(np.abs(audio_data))
+    if max_abs > 0:
+        audio_data = audio_data / max_abs
+    
+    return audio_data, sample_rate
+
+def concatenate_sounds(json_files, intervals, order_indices, target_sample_rate=44100):
+    """Concatenate multiple sounds with specified intervals and order"""
+    try:
+        # Filter out None files and load parameters
+        valid_files = [(i, f) for i, f in enumerate(json_files) if f is not None]
+        if not valid_files:
+            return None, None, "No valid JSON files provided"
+        
+        # Load all parameter sets
+        parameter_sets = []
+        for orig_idx, file_path in valid_files:
+            try:
+                with open(file_path, 'r') as f:
+                    params = json.load(f)
+                parameter_sets.append((orig_idx, params))
+            except Exception as e:
+                return None, None, f"Error loading file {orig_idx + 1}: {str(e)}"
+        
+        # Generate audio for each parameter set
+        audio_segments = []
+        for orig_idx, params in parameter_sets:
+            audio_data, sample_rate = synthesize_single_sound(params)
+            
+            # Resample if necessary (simple method)
+            if sample_rate != target_sample_rate:
+                # Simple resampling by interpolation
+                old_length = len(audio_data)
+                new_length = int(old_length * target_sample_rate / sample_rate)
+                audio_data = np.interp(
+                    np.linspace(0, old_length - 1, new_length),
+                    np.arange(old_length),
+                    audio_data
+                )
+            
+            audio_segments.append((orig_idx, audio_data))
+        
+        # Sort by order indices
+        sorted_segments = []
+        for i, order_idx in enumerate(order_indices[:len(audio_segments)]):
+            if 0 <= order_idx < len(audio_segments):
+                sorted_segments.append(audio_segments[order_idx])
+        
+        if not sorted_segments:
+            return None, None, "Invalid order configuration"
+        
+        # Concatenate with intervals
+        concatenated_audio = []
+        interval_samples_list = [int(interval_ms * target_sample_rate / 1000) for interval_ms in intervals]
+        
+        for i, (orig_idx, audio_segment) in enumerate(sorted_segments):
+            concatenated_audio.extend(audio_segment)
+            
+            # Add interval (except after the last segment)
+            if i < len(sorted_segments) - 1:
+                interval_idx = min(i, len(interval_samples_list) - 1)
+                interval_samples = interval_samples_list[interval_idx]
+                concatenated_audio.extend(np.zeros(interval_samples))
+        
+        concatenated_audio = np.array(concatenated_audio)
+        
+        # Final normalization
+        max_abs = np.max(np.abs(concatenated_audio))
+        if max_abs > 0:
+            concatenated_audio = concatenated_audio / max_abs
+        
+        return concatenated_audio, target_sample_rate, "Concatenation successful!"
+        
+    except Exception as e:
+        return None, None, f"Concatenation failed: {str(e)}"
+
+def create_concatenation_interface():
+    """Create the concatenation page interface"""
+    with gr.Column():
+        gr.Markdown("# Sound Concatenation")
+        gr.Markdown("Load up to 6 JSON parameter files and concatenate them with adjustable intervals.")
+        
+        # File upload section
+        gr.Markdown("## Load Parameter Files")
+        json_files = []
+        for i in range(6):
+            file_input = gr.File(
+                label=f"JSON File {i + 1}",
+                file_types=[".json"],
+                value=None
+            )
+            json_files.append(file_input)
+        
+        # Configuration section
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("## Concatenation Settings")
+                
+                # Order configuration
+                gr.Markdown("### Playback Order (0-5, -1 for skip)")
+                order_inputs = []
+                for i in range(6):
+                    order_input = gr.Number(
+                        label=f"Position {i + 1}",
+                        value=i if i < 3 else -1,
+                        precision=0,
+                        minimum=-1,
+                        maximum=5
+                    )
+                    order_inputs.append(order_input)
+                
+                # Interval configuration
+                gr.Markdown("### Intervals Between Sounds (ms)")
+                interval_inputs = []
+                for i in range(5):  # 5 intervals for 6 sounds
+                    interval_input = gr.Number(
+                        label=f"Interval {i + 1} → {i + 2}",
+                        value=500,
+                        minimum=0,
+                        maximum=5000
+                    )
+                    interval_inputs.append(interval_input)
+        
+        # Control buttons
+        with gr.Row():
+            concatenate_btn = gr.Button("Concatenate Sounds", variant="primary", size="lg")
+            clear_btn = gr.Button("Clear All", variant="secondary")
+        
+        # Status and results
+        concat_status = gr.Textbox(label="Status", interactive=False)
+        
+        with gr.Row():
+            with gr.Column():
+                concat_plot = gr.Plot(label="Concatenated Spectrogram")
+                concat_audio = gr.Audio(label="Concatenated Audio", type="filepath")
+        
+        # Download section
+        download_concat = gr.File(label="Download Concatenated Audio", visible=False)
+        
+        def perform_concatenation(*args):
+            """Handle the concatenation process"""
+            json_files_list = args[:6]
+            intervals_list = args[6:11]
+            order_list = [int(x) for x in args[11:17]]
+            
+            # Filter valid order indices
+            valid_orders = [x for x in order_list if x >= 0]
+            
+            # Perform concatenation
+            audio_data, sample_rate, status = concatenate_sounds(
+                json_files_list, intervals_list, valid_orders
+            )
+            
+            if audio_data is None:
+                return gr.update(), gr.update(), status, gr.update(visible=False)
+            
+            # Create spectrogram
+            plt.close('all')
+            gc.collect()
+            
+            try:
+                # Convert to int16 for spectrogram and saving
+                audio_int16 = np.int16(audio_data * 32767)
+                
+                # Create spectrogram
+                f_spec, t_spec, Sxx = spectrogram(
+                    audio_int16.astype(float), fs=sample_rate, nperseg=1024
+                )
+                dominant_freqs = f_spec[np.argmax(Sxx, axis=0)]
+                
+                # Create plot
+                fig = plt.figure(figsize=(16, 6))
+                ax = fig.add_subplot(111)
+                
+                pcm = ax.pcolormesh(t_spec, f_spec, 10 * np.log10(Sxx + 1e-10), shading='gouraud')
+                fig.colorbar(pcm, ax=ax, label='dB')
+                ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
+                ax.set_ylabel('Frequency [Hz]')
+                ax.set_xlabel('Time [sec]')
+                ax.set_title('Concatenated Audio Spectrogram')
+                ax.set_ylim(0, 10000)
+                ax.legend()
+                
+                total_duration = len(audio_int16) / sample_rate
+                tick_interval = max(0.25, total_duration / 20)  # Adaptive tick interval
+                xticks = np.arange(0, total_duration, tick_interval)
+                if not np.isclose(xticks[-1], total_duration):
+                    xticks = np.append(xticks, total_duration)
+                ax.set_xticks(xticks)
+                ax.set_xticklabels([f"{tick:.2f}" for tick in xticks])
+                
+                plt.tight_layout()
+                
+                # Save audio file
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                wavfile.write(temp_file.name, sample_rate, audio_int16)
+                temp_file.close()
+                
+                # Create download file
+                download_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav', prefix='concatenated_audio_')
+                wavfile.write(download_file.name, sample_rate, audio_int16)
+                download_file.close()
+                
+                return fig, temp_file.name, status, gr.update(value=download_file.name, visible=True)
+                
+            except Exception as e:
+                return gr.update(), gr.update(), f"Error creating output: {str(e)}", gr.update(visible=False)
+        
+        def clear_all():
+            """Clear all inputs"""
+            updates = []
+            # Clear file inputs
+            for _ in range(6):
+                updates.append(gr.update(value=None))
+            # Reset intervals
+            for _ in range(5):
+                updates.append(gr.update(value=500))
+            # Reset order
+            for i in range(6):
+                updates.append(gr.update(value=i if i < 3 else -1))
+            # Clear outputs and status
+            updates.extend([
+                gr.update(),  # plot
+                gr.update(),  # audio
+                gr.update(value="Cleared all inputs"),  # status
+                gr.update(visible=False)  # download
+            ])
+            return updates
+        
+        # Connect the concatenation function
+        all_concat_inputs = json_files + interval_inputs + order_inputs
+        concatenate_btn.click(
+            fn=perform_concatenation,
+            inputs=all_concat_inputs,
+            outputs=[concat_plot, concat_audio, concat_status, download_concat]
+        )
+        
+        # Connect the clear function
+        all_concat_outputs = json_files + interval_inputs + order_inputs + [concat_plot, concat_audio, concat_status, download_concat]
+        clear_btn.click(
+            fn=clear_all,
+            outputs=all_concat_outputs
+        )
+
 def export_parameters(sample_rate_idx, duration, num_partials, num_formants, *all_params):
     """Export all parameters to a JSON file"""
     try:
@@ -265,8 +542,9 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     # Return the figure (Gradio will handle its lifecycle)
     return fig, temp_file.name
 
-def create_interface():
-    with gr.Blocks(title="Additive Vocal Synthesis with Formants", css=".gradio-container {max-width: none !important}") as demo:
+def create_synthesis_interface():
+    """Create the basic synthesis interface"""
+    with gr.Column():
         gr.Markdown("# Additive Vocal Synthesis with Formants")
         
         # Export/Import section
@@ -507,15 +785,28 @@ def create_interface():
                     outputs=[plot_output, audio_output]
                 )
         
-        # Initial synthesis when the interface loads
-        demo.load(
-            fn=synthesize_audio,
-            inputs=all_inputs,
-            outputs=[plot_output, audio_output]
-        )
-        
         # Set up auto-synthesis
         setup_auto_synthesis()
+        
+        return all_inputs, [plot_output, audio_output]
+
+def create_interface():
+    """Create the main interface with tabs"""
+    with gr.Blocks(title="Additive Vocal Synthesis Suite", css=".gradio-container {max-width: none !important}") as demo:
+        
+        with gr.Tabs():
+            with gr.Tab("Synthesis"):
+                synthesis_inputs, synthesis_outputs = create_synthesis_interface()
+                
+                # Initial synthesis when the interface loads
+                demo.load(
+                    fn=synthesize_audio,
+                    inputs=synthesis_inputs,
+                    outputs=synthesis_outputs
+                )
+            
+            with gr.Tab("Concatenation"):
+                create_concatenation_interface()
     
     return demo
 
