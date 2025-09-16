@@ -22,35 +22,189 @@ def bandpass_filter(data, center_freq, bandwidth, fs, order=2):
     b, a = butter(order, [low, high], btype='band')
     return lfilter(b, a, data)
 
-def additive_sines_with_vibrato_and_envelope(partials, duration_ms, sample_rate):
+def highpass_filter(data, cutoff_freq, fs, order=2):
+    """High-pass filter for noise components"""
+    nyq = 0.5 * fs
+    high = min(0.99999, cutoff_freq / nyq)
+    b, a = butter(order, high, btype='high')
+    return lfilter(b, a, data)
+
+def get_inharmonic_frequency(partial_idx, fundamental, inharmonicity=0.1):
+    """Generate inharmonic frequencies for more natural sounds"""
+    harmonic_freq = fundamental * (partial_idx + 1)
+    # Add inharmonicity factor
+    inharmonic_offset = harmonic_freq * inharmonicity * np.random.uniform(-0.5, 0.5)
+    return max(50, harmonic_freq + inharmonic_offset)
+
+def frequency_sweep(base_freq, t, sweep_rate=0, sweep_depth=0):
+    """Add frequency sweeps and glides"""
+    if sweep_rate > 0:
+        sweep = sweep_depth * t * sweep_rate
+        return base_freq + sweep
+    return base_freq
+
+def complex_amplitude_modulation(t, base_amp, trill_rate=0, trill_depth=0, flutter_rate=0, flutter_depth=0):
+    """Generate complex amplitude modulation patterns"""
+    modulation = 1.0
+    
+    # Trill modulation (rapid amplitude changes)
+    if trill_rate > 0:
+        modulation *= (1 + trill_depth * np.sin(2 * np.pi * trill_rate * t))
+    
+    # Flutter modulation (subtle variations)
+    if flutter_rate > 0:
+        modulation *= (1 + flutter_depth * 0.1 * np.sin(2 * np.pi * flutter_rate * t))
+    
+    # Add some randomness for naturalness
+    noise_mod = 1 + 0.02 * np.random.normal(0, 1, len(t))
+    modulation *= noise_mod
+    
+    return base_amp * np.abs(modulation)
+
+def add_breath_noise(audio, noise_level=0.05, filter_freq=8000, sample_rate=44100):
+    """Add filtered noise to simulate breath sounds"""
+    if noise_level <= 0:
+        return audio
+    
+    noise = np.random.normal(0, noise_level, len(audio))
+    # High-pass filter for breath-like noise
+    filtered_noise = highpass_filter(noise, filter_freq, sample_rate)
+    return audio + filtered_noise
+
+def enhanced_envelope(t, attack_ms, decay_ms, total_ms, envelope_type='exponential'):
+    """Generate various envelope shapes for different vocal characteristics"""
+    attack_samples = int((attack_ms / 1000) * len(t) / (total_ms / 1000))
+    decay_samples = int((decay_ms / 1000) * len(t) / (total_ms / 1000))
+    sustain_samples = max(0, len(t) - attack_samples - decay_samples)
+    
+    env = np.ones_like(t)
+    
+    # Attack phase
+    if attack_samples > 0:
+        if envelope_type == 'sharp_attack':
+            attack_curve = 1 - np.exp(-10 * np.linspace(0, 1, attack_samples))
+        elif envelope_type == 'smooth_swell':
+            attack_curve = np.sin(np.pi * np.linspace(0, 0.5, attack_samples))
+        else:  # exponential
+            attack_curve = 1 - np.exp(-5 * np.linspace(0, 1, attack_samples))
+        
+        env[:attack_samples] = attack_curve
+    
+    # Sustain phase
+    if sustain_samples > 0:
+        sustain_start = attack_samples
+        sustain_end = attack_samples + sustain_samples
+        # Sustain at full amplitude with slight variations for naturalness
+        sustain_level = 1.0
+        if envelope_type == 'smooth_swell':
+            # Slight amplitude variation during sustain for more natural sound
+            sustain_variation = 0.05 * np.sin(2 * np.pi * 3 * np.linspace(0, 1, sustain_samples))
+            env[sustain_start:sustain_end] = sustain_level + sustain_variation
+        else:
+            env[sustain_start:sustain_end] = sustain_level
+    
+    # Decay phase
+    if decay_samples > 0:
+        decay_start = len(t) - decay_samples
+        if envelope_type == 'sharp_attack':
+            decay_curve = np.exp(-5 * np.linspace(0, 1, decay_samples))
+        else:
+            decay_curve = np.exp(-3 * np.linspace(0, 1, decay_samples))
+        env[decay_start:] = decay_curve
+    
+    return env
+
+def additive_sines_with_enhanced_features(partials, duration_ms, sample_rate, 
+                                        inharmonicity=0.1, global_sweep_rate=0, 
+                                        global_trill_rate=0, noise_level=0.02):
+    """Enhanced additive synthesis with natural vocal characteristics"""
     t = np.linspace(0, duration_ms / 1000, int(sample_rate * duration_ms / 1000), endpoint=False)
     wave = np.zeros_like(t)
-    for p in partials:
-        if p['vibrato'] and p['vib_depth'] > 0 and p['vib_rate'] > 0:
-            instantaneous_freq = p['freq'] + p['vib_depth'] * np.sin(2 * np.pi * p['vib_rate'] * t)
-            phase = 2 * np.pi * np.cumsum(instantaneous_freq) / sample_rate
+    
+    for i, p in enumerate(partials):
+        # Use inharmonic frequencies
+        if 'inharmonic' in p and p['inharmonic']:
+            freq = get_inharmonic_frequency(i, p['freq'], inharmonicity)
         else:
-            phase = 2 * np.pi * p['freq'] * t
-        env = envelope(t, p['attack'], p['decay'], duration_ms)
-        wave += p['amp'] * np.sin(phase) * env
+            freq = p['freq']
+        
+        # Add global and individual frequency sweeps
+        sweep_rate = global_sweep_rate + p.get('sweep_rate', 0)
+        sweep_depth = freq * 0.2  # Sweep depth as percentage of frequency
+        instantaneous_freq = frequency_sweep(freq, t, sweep_rate, sweep_depth)
+        
+        # Add random frequency jitter for naturalness
+        freq_jitter = np.random.normal(0, freq * 0.01, len(t))
+        freq_jitter = np.cumsum(freq_jitter) * 0.0005  # Smooth the jitter
+        instantaneous_freq += freq_jitter
+        
+        # Generate phase with frequency modulation
+        phase = 2 * np.pi * np.cumsum(instantaneous_freq) / sample_rate
+        
+        # Complex amplitude modulation
+        trill_rate = global_trill_rate + p.get('vib_rate', 0)
+        trill_depth = p.get('vib_depth', 20) / freq if freq > 0 else 0
+        flutter_rate = trill_rate * 0.3  # Secondary flutter
+        
+        modulated_amp = complex_amplitude_modulation(
+            t, p['amp'], trill_rate, trill_depth, flutter_rate, 0.1
+        )
+        
+        # Enhanced envelope
+        envelope_type = p.get('envelope_type', 'exponential')
+        env = enhanced_envelope(t, p['attack'], p['decay'], duration_ms, envelope_type)
+        
+        # Generate the sine wave
+        sine_wave = np.sin(phase)
+        
+        # Add harmonic distortion for more character
+        if p.get('distortion', 0) > 0:
+            distortion_amount = p['distortion']
+            sine_wave = np.tanh(sine_wave * (1 + distortion_amount))
+        
+        wave += modulated_amp * sine_wave * env
+    
+    # Add breath noise
+    wave = add_breath_noise(wave, noise_level, 8000, sample_rate)
+    
+    # Final normalization
     max_abs = np.max(np.abs(wave))
     if max_abs > 0:
         wave = wave / max_abs
+    
     return wave
 
-def envelope(t, attack_ms, decay_ms, total_ms):
-    attack_samples = int((attack_ms / 1000) * len(t) / (total_ms / 1000))
-    decay_samples = int((decay_ms / 1000) * len(t) / (total_ms / 1000))
-    sustain_samples = len(t) - attack_samples - decay_samples
-    env = np.ones_like(t)
-    # Attack
-    if attack_samples > 0:
-        env[:attack_samples] = np.linspace(0, 1, attack_samples)
-    # Decay
-    if decay_samples > 0:
-        env[-decay_samples:] = np.linspace(1, 0, decay_samples)
-    # Sustain is already 1
-    return env
+# Vocal presets for different styles
+VOCAL_PRESETS = {
+    "melodic": {
+        "inharmonicity": 0.05,
+        "global_sweep_rate": 0.5,
+        "global_trill_rate": 12,
+        "noise_level": 0.01,
+        "formants": [(800, 200), (1200, 150), (2600, 200)]
+    },
+    "percussive": {
+        "inharmonicity": 0.3,
+        "global_sweep_rate": 0.1,
+        "global_trill_rate": 25,
+        "noise_level": 0.05,
+        "formants": [(1000, 400), (2000, 300)]
+    },
+    "breathy": {
+        "inharmonicity": 0.15,
+        "global_sweep_rate": 0.2,
+        "global_trill_rate": 8,
+        "noise_level": 0.08,
+        "formants": [(600, 300), (1800, 400), (3200, 500)]
+    },
+    "harmonic": {
+        "inharmonicity": 0.02,
+        "global_sweep_rate": 0.8,
+        "global_trill_rate": 15,
+        "noise_level": 0.005,
+        "formants": [(900, 100), (1400, 120), (2800, 150)]
+    }
+}
 
 def get_default_frequency(partial_idx):
     """Calculate default frequency for a partial, ensuring it stays within bounds"""
@@ -65,6 +219,15 @@ def synthesize_single_sound(parameters):
     num_partials = parameters["global"]["num_partials"]
     num_formants = parameters["global"]["num_formants"]
     
+    # Extract enhanced parameters
+    vocal_style = parameters["global"].get("vocal_style", "melodic")
+    preset = VOCAL_PRESETS.get(vocal_style, VOCAL_PRESETS["melodic"])
+    
+    inharmonicity = parameters["global"].get("inharmonicity", preset["inharmonicity"])
+    global_sweep_rate = parameters["global"].get("global_sweep_rate", preset["global_sweep_rate"])
+    global_trill_rate = parameters["global"].get("global_trill_rate", preset["global_trill_rate"])
+    noise_level = parameters["global"].get("noise_level", preset["noise_level"])
+    
     # Build partials list
     partials = []
     for i in range(num_partials):
@@ -77,11 +240,18 @@ def synthesize_single_sound(parameters):
                 'decay': p['decay'],
                 'vibrato': p['vibrato'],
                 'vib_rate': p['vib_rate'] if p['vibrato'] else 0,
-                'vib_depth': p['vib_depth'] if p['vibrato'] else 0
+                'vib_depth': p['vib_depth'] if p['vibrato'] else 0,
+                'inharmonic': p.get('inharmonic', True),
+                'envelope_type': p.get('envelope_type', 'exponential'),
+                'distortion': p.get('distortion', 0),
+                'sweep_rate': p.get('sweep_rate', 0)
             })
     
-    # Synthesize audio
-    audio_data = additive_sines_with_vibrato_and_envelope(partials, duration, sample_rate)
+    # Synthesize audio with enhanced features
+    audio_data = additive_sines_with_enhanced_features(
+        partials, duration, sample_rate, inharmonicity, 
+        global_sweep_rate, global_trill_rate, noise_level
+    )
     
     # Apply formants
     for i in range(num_formants):
@@ -89,7 +259,12 @@ def synthesize_single_sound(parameters):
             f = parameters["formants"][i]
             audio_data = bandpass_filter(audio_data, f['freq'], f['bandwidth'], sample_rate)
     
-    # Normalize
+    # Apply preset formants if specified
+    if vocal_style in VOCAL_PRESETS:
+        for formant_freq, bandwidth in preset["formants"]:
+            audio_data = bandpass_filter(audio_data, formant_freq, bandwidth, sample_rate)
+    
+    # Final normalization
     max_abs = np.max(np.abs(audio_data))
     if max_abs > 0:
         audio_data = audio_data / max_abs
@@ -334,7 +509,9 @@ def create_concatenation_interface():
             outputs=all_concat_outputs
         )
 
-def export_parameters(sample_rate_idx, duration, num_partials, num_formants, *all_params):
+def export_parameters(sample_rate_idx, duration, num_partials, num_formants, 
+                     vocal_style, inharmonicity, global_sweep_rate, 
+                     global_trill_rate, noise_level, *all_params):
     """Export all parameters to a JSON file"""
     try:
         # Extract sample rate value
@@ -348,15 +525,20 @@ def export_parameters(sample_rate_idx, duration, num_partials, num_formants, *al
                 "sample_rate_idx": sample_rate_idx,
                 "duration": duration,
                 "num_partials": num_partials,
-                "num_formants": num_formants
+                "num_formants": num_formants,
+                "vocal_style": vocal_style,
+                "inharmonicity": inharmonicity,
+                "global_sweep_rate": global_sweep_rate,
+                "global_trill_rate": global_trill_rate,
+                "noise_level": noise_level
             },
             "partials": [],
             "formants": []
         }
         
-        # Extract partial parameters (20 partials * 7 params each)
+        # Extract partial parameters (20 partials * 10 params each)
         for i in range(20):
-            base_idx = i * 7
+            base_idx = i * 10
             partial_data = {
                 "freq": all_params[base_idx],
                 "amp": all_params[base_idx + 1],
@@ -364,12 +546,15 @@ def export_parameters(sample_rate_idx, duration, num_partials, num_formants, *al
                 "decay": all_params[base_idx + 3],
                 "vibrato": all_params[base_idx + 4],
                 "vib_rate": all_params[base_idx + 5],
-                "vib_depth": all_params[base_idx + 6]
+                "vib_depth": all_params[base_idx + 6],
+                "inharmonic": all_params[base_idx + 7],
+                "envelope_type": all_params[base_idx + 8],
+                "distortion": all_params[base_idx + 9]
             }
             parameters["partials"].append(partial_data)
         
         # Extract formant parameters (5 formants * 2 params each)
-        formant_start_idx = 140
+        formant_start_idx = 200
         for i in range(5):
             formant_data = {
                 "freq": all_params[formant_start_idx + i * 2],
@@ -391,7 +576,7 @@ def import_parameters(file_path):
     """Import parameters from a JSON file and return update values for all components"""
     try:
         if file_path is None:
-            return [gr.update() for _ in range(154)] + ["Please select a file to import."]
+            return [gr.update() for _ in range(219)] + ["Please select a file to import."]
         
         with open(file_path, 'r') as f:
             parameters = json.load(f)
@@ -402,29 +587,60 @@ def import_parameters(file_path):
         # Global parameters updates
         sample_rates = ["32000 Hz", "44100 Hz", "48000 Hz"]
         sample_rate_idx = parameters["global"]["sample_rate_idx"]
-        # Convert index to actual dropdown choice string
         sample_rate_choice = sample_rates[sample_rate_idx]
-        updates.append(gr.update(value=sample_rate_choice))  # sample_rate dropdown
-        updates.append(gr.update(value=parameters["global"]["duration"]))  # duration
-        updates.append(gr.update(value=parameters["global"]["num_partials"]))  # num_partials
-        updates.append(gr.update(value=parameters["global"]["num_formants"]))  # num_formants
+        updates.append(gr.update(value=sample_rate_choice))
+        updates.append(gr.update(value=parameters["global"]["duration"]))
+        updates.append(gr.update(value=parameters["global"]["num_partials"]))
+        updates.append(gr.update(value=parameters["global"]["num_formants"]))
         
-        # Partial parameters updates (20 partials * 7 params = 140 updates)
+        # Enhanced global parameters
+        updates.append(gr.update(value=parameters["global"].get("vocal_style", "melodic")))
+        updates.append(gr.update(value=parameters["global"].get("inharmonicity", 0.1)))
+        updates.append(gr.update(value=parameters["global"].get("global_sweep_rate", 0.5)))
+        updates.append(gr.update(value=parameters["global"].get("global_trill_rate", 12)))
+        updates.append(gr.update(value=parameters["global"].get("noise_level", 0.02)))
+        
+        # Partial parameters updates (20 partials * 10 params = 200 updates)
+        # Handle cases where JSON has fewer than 20 partials
         for i in range(20):
-            partial = parameters["partials"][i]
-            updates.append(gr.update(value=partial["freq"]))
-            updates.append(gr.update(value=partial["amp"]))
-            updates.append(gr.update(value=partial["attack"]))
-            updates.append(gr.update(value=partial["decay"]))
-            updates.append(gr.update(value=partial["vibrato"]))
-            updates.append(gr.update(value=partial["vib_rate"]))
-            updates.append(gr.update(value=partial["vib_depth"]))
+            if i < len(parameters["partials"]):
+                # Use actual partial data
+                partial = parameters["partials"][i]
+                updates.append(gr.update(value=partial["freq"]))
+                updates.append(gr.update(value=partial["amp"]))
+                updates.append(gr.update(value=partial["attack"]))
+                updates.append(gr.update(value=partial["decay"]))
+                updates.append(gr.update(value=partial["vibrato"]))
+                updates.append(gr.update(value=partial["vib_rate"]))
+                updates.append(gr.update(value=partial["vib_depth"]))
+                updates.append(gr.update(value=partial.get("inharmonic", True)))
+                updates.append(gr.update(value=partial.get("envelope_type", "exponential")))
+                updates.append(gr.update(value=partial.get("distortion", 0)))
+            else:
+                # Use default values for unused partials
+                default_freq = 220 * (i + 1)
+                updates.append(gr.update(value=min(default_freq, 15000)))  # freq
+                updates.append(gr.update(value=0.05))  # amp (very low)
+                updates.append(gr.update(value=50))    # attack
+                updates.append(gr.update(value=200))   # decay
+                updates.append(gr.update(value=False)) # vibrato
+                updates.append(gr.update(value=5))     # vib_rate
+                updates.append(gr.update(value=20))    # vib_depth
+                updates.append(gr.update(value=True))  # inharmonic
+                updates.append(gr.update(value="exponential"))  # envelope_type
+                updates.append(gr.update(value=0))     # distortion
         
         # Formant parameters updates (5 formants * 2 params = 10 updates)
+        # Handle cases where JSON has fewer than 5 formants
         for i in range(5):
-            formant = parameters["formants"][i]
-            updates.append(gr.update(value=formant["freq"]))
-            updates.append(gr.update(value=formant["bandwidth"]))
+            if i < len(parameters["formants"]):
+                formant = parameters["formants"][i]
+                updates.append(gr.update(value=formant["freq"]))
+                updates.append(gr.update(value=formant["bandwidth"]))
+            else:
+                # Use default values for unused formants
+                updates.append(gr.update(value=500 + 500 * i))  # freq
+                updates.append(gr.update(value=200))            # bandwidth
         
         # Success message
         updates.append("Parameters imported successfully!")
@@ -433,10 +649,11 @@ def import_parameters(file_path):
         
     except Exception as e:
         # Return no updates and error message
-        return [gr.update() for _ in range(154)] + [f"Import failed: {str(e)}"]
+        return [gr.update() for _ in range(219)] + [f"Import failed: {str(e)}"]
 
-def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants, 
-                    # Partial parameters (20 partials * 7 params each)
+def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
+                    vocal_style, inharmonicity, global_sweep_rate, 
+                    global_trill_rate, noise_level,
                     *partial_and_formant_params):
     
     # Clean up any existing figures before creating new ones
@@ -447,11 +664,11 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     sample_rates = [32000, 44100, 48000]
     sample_rate = sample_rates[sample_rate_idx]
     
-    # Extract partial parameters (20 partials * 7 parameters each = 140 params)
+    # Extract partial parameters (20 partials * 10 parameters each = 200 params)
     partials = []
     for i in range(20):
         if i < num_partials:
-            base_idx = i * 7
+            base_idx = i * 10
             freq = partial_and_formant_params[base_idx]
             amp = partial_and_formant_params[base_idx + 1]
             attack = partial_and_formant_params[base_idx + 2]
@@ -459,6 +676,9 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
             vibrato = partial_and_formant_params[base_idx + 4]
             vib_rate = partial_and_formant_params[base_idx + 5] if vibrato else 0
             vib_depth = partial_and_formant_params[base_idx + 6] if vibrato else 0
+            inharmonic = partial_and_formant_params[base_idx + 7]
+            envelope_type = partial_and_formant_params[base_idx + 8]
+            distortion = partial_and_formant_params[base_idx + 9]
             
             partials.append({
                 'freq': freq,
@@ -467,13 +687,16 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
                 'decay': decay,
                 'vibrato': vibrato,
                 'vib_rate': vib_rate,
-                'vib_depth': vib_depth
+                'vib_depth': vib_depth,
+                'inharmonic': inharmonic,
+                'envelope_type': envelope_type,
+                'distortion': distortion
             })
     
     # Extract formant parameters (5 formants * 2 params each = 10 params)
     formant_freqs = []
     formant_bandwidths = []
-    formant_start_idx = 140  # After 20 partials * 7 params
+    formant_start_idx = 200  # After 20 partials * 10 params
     
     for i in range(5):
         if i < num_formants:
@@ -482,10 +705,21 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
             formant_freqs.append(f_freq)
             formant_bandwidths.append(f_bw)
     
-    # Synthesize audio
-    audio_data = additive_sines_with_vibrato_and_envelope(partials, duration, sample_rate)
+    # Synthesize audio with enhanced features
+    audio_data = additive_sines_with_enhanced_features(
+        partials, duration, sample_rate, inharmonicity, 
+        global_sweep_rate, global_trill_rate, noise_level
+    )
+    
+    # Apply user-defined formants
     for f, bw in zip(formant_freqs, formant_bandwidths):
         audio_data = bandpass_filter(audio_data, f, bw, sample_rate)
+    
+    # Apply preset formants
+    if vocal_style in VOCAL_PRESETS:
+        preset = VOCAL_PRESETS[vocal_style]
+        for formant_freq, bandwidth in preset["formants"]:
+            audio_data = bandpass_filter(audio_data, formant_freq, bandwidth, sample_rate)
     
     # Normalize
     max_abs = np.max(np.abs(audio_data))
@@ -510,7 +744,7 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
         ax.plot(t_spec, dominant_freqs, color='w', linewidth=1.5, label='Dominant Freq')
         ax.set_ylabel('Frequency [Hz]')
         ax.set_xlabel('Time [sec]')
-        ax.set_title('Spectrogram (with Dominant Frequency)')
+        ax.set_title(f'Enhanced Vocal Synthesis - {vocal_style.title()} Style')
         ax.set_ylim(0, 15000)
         ax.legend()
         
@@ -543,9 +777,42 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
     return fig, temp_file.name
 
 def create_synthesis_interface():
-    """Create the basic synthesis interface"""
+    """Create the synthesis interface"""
     with gr.Column():
-        gr.Markdown("# Additive Vocal Synthesis with Formants")
+        gr.Markdown("# Additive Vocal Synthesis")
+
+        # Parameter Reference Section
+        with gr.Accordion("📖 Parameter Reference Guide", open=False):
+            gr.Markdown("""
+                <div style="font-size: 18px; line-height: 2.5;">
+                
+                ## Global Parameters<br>
+                •  **Sample Rate**: Audio quality (32kHz = lower quality, 44.1kHz = CD quality, 48kHz = studio quality)<br>
+                •  **Duration**: Total length of sound in milliseconds<br>
+                •  **Number of Partials**: How many sine waves to layer (more = richer sound)<br>
+                •  **Number of Formants**: How many frequency filters to apply<br>
+                •  **Vocal Style**: Preset configurations (melodic/percussive/breathy/harmonic)<br>
+                •  **Inharmonicity**: Deviation from pure harmonics (0=pure, 0.5=very inharmonic)<br>
+                •  **Global Sweep Rate**: Speed of pitch bends across all partials<br>
+                •  **Global Trill Rate**: Speed of vibrato/tremolo in Hz<br>
+                •  **Breath Noise**: Amount of high-frequency noise added<br>
+                
+                ## Partial Parameters (Per Sine Wave)<br>
+                
+                •  **Frequency**: Base pitch in Hz (50-15000)<br>
+                •  **Amplitude**: Volume level (0.05-1.0)<br>
+                •  **Attack**: Time to reach full volume (0-1000ms)<br>
+                •  **Decay**: Time to fade out (10-2000ms)<br>
+                •  **Vibrato**: Enable pitch oscillation<br>
+                •  **Envelope**: Volume shape over time (exponential/sharp_attack/smooth_swell)<br>
+                •  **Distortion**: Harmonic distortion amount (0-2)<br>
+                
+                ## Formant Parameters<br>
+                
+                •  **Frequency**: Center frequency of filter (200-15000Hz)<br>
+                •  **Bandwidth**: Width of frequency range affected (50-1000Hz)<br>
+                </div>
+            """)
         
         # Export/Import section
         with gr.Row():
@@ -582,7 +849,7 @@ def create_synthesis_interface():
                     type="index"
                 )
                 duration = gr.Slider(
-                    minimum=100,
+                    minimum=50,
                     maximum=5000,
                     value=1000,
                     step=100,
@@ -601,6 +868,41 @@ def create_synthesis_interface():
                     value=2,
                     step=1,
                     label="Number of Formants"
+                )
+            
+            with gr.Column(scale=1):
+                vocal_style = gr.Dropdown(
+                    choices=list(VOCAL_PRESETS.keys()),
+                    value="melodic",
+                    label="Vocal Style Preset"
+                )
+                inharmonicity = gr.Slider(
+                    minimum=0,
+                    maximum=1,
+                    value=0.1,
+                    step=0.05,
+                    label="Inharmonicity (0=harmonic, 1=very inharmonic)"
+                )
+                global_sweep_rate = gr.Slider(
+                    minimum=0,
+                    maximum=10,
+                    value=0.5,
+                    step=0.1,
+                    label="Global Frequency Sweep Rate"
+                )
+                global_trill_rate = gr.Slider(
+                    minimum=0,
+                    maximum=100,
+                    value=12,
+                    step=1,
+                    label="Global Trill Rate (Hz)"
+                )
+                noise_level = gr.Slider(
+                    minimum=0,
+                    maximum=0.5,
+                    value=0.02,
+                    step=0.001,
+                    label="Breath Noise Level"
                 )
         
         # Partial controls - organized in rows of 5 columns each
@@ -638,19 +940,19 @@ def create_synthesis_interface():
                             minimum=0,
                             maximum=1000,
                             value=50,
-                            step=10,
+                            step=5,
                             label=f"Attack (ms)"
                         )
                         decay = gr.Slider(
-                            minimum=0,
-                            maximum=1000,
+                            minimum=10,
+                            maximum=2000,
                             value=200,
-                            step=10,
+                            step=5,
                             label=f"Decay (ms)"
                         )
                         vibrato = gr.Checkbox(label="Vibrato", value=False)
                         vib_rate = gr.Slider(
-                            minimum=1,
+                            minimum=0,
                             maximum=40,
                             value=5,
                             step=1,
@@ -658,16 +960,29 @@ def create_synthesis_interface():
                             visible=False
                         )
                         vib_depth = gr.Slider(
-                            minimum=1,
+                            minimum=0,
                             maximum=300,
                             value=20,
                             step=1,
                             label="Vib Depth (Hz)",
                             visible=False
                         )
+                        inharmonic = gr.Checkbox(label="Inharmonic", value=True)
+                        envelope_type = gr.Dropdown(
+                            choices=["exponential", "sharp_attack", "smooth_swell"],
+                            value="exponential",
+                            label="Envelope"
+                        )
+                        distortion = gr.Slider(
+                            minimum=0,
+                            maximum=2,
+                            value=0,
+                            step=0.1,
+                            label="Distortion"
+                        )
                         
                         # Store components for this partial
-                        partial_components.extend([freq, amp, attack, decay, vibrato, vib_rate, vib_depth])
+                        partial_components.extend([freq, amp, attack, decay, vibrato, vib_rate, vib_depth, inharmonic, envelope_type, distortion])
                         row_columns.append(column_comp)
                         
                         # Show/hide vibrato controls
@@ -726,6 +1041,18 @@ def create_synthesis_interface():
                 updates.append(gr.update(visible=(i < num_formants_val)))
             return updates
         
+        def update_preset_parameters(preset_name):
+            """Update enhanced parameters based on vocal style preset"""
+            if preset_name in VOCAL_PRESETS:
+                preset = VOCAL_PRESETS[preset_name]
+                return (
+                    gr.update(value=preset["inharmonicity"]),
+                    gr.update(value=preset["global_sweep_rate"]),
+                    gr.update(value=preset["global_trill_rate"]),
+                    gr.update(value=preset["noise_level"])
+                )
+            return gr.update(), gr.update(), gr.update(), gr.update()
+        
         # Connect dynamic visibility updates
         num_partials.change(
             fn=update_partial_visibility,
@@ -739,13 +1066,25 @@ def create_synthesis_interface():
             outputs=formant_row_components
         )
         
+        # Connect preset updates
+        vocal_style.change(
+            fn=update_preset_parameters,
+            inputs=[vocal_style],
+            outputs=[inharmonicity, global_sweep_rate, global_trill_rate, noise_level]
+        )
+        
         # Collect all inputs for synthesis and export/import
-        all_inputs = [sample_rate, duration, num_partials, num_formants]
-        all_inputs.extend(partial_components)  # 20 partials * 7 params = 140
+        all_inputs = [sample_rate, duration, num_partials, num_formants, 
+                     vocal_style, inharmonicity, global_sweep_rate, 
+                     global_trill_rate, noise_level]
+        all_inputs.extend(partial_components)  # 20 partials * 10 params = 200
         all_inputs.extend(formant_components)  # 5 formants * 2 params = 10
         
-        # All components for updates (154 total: 4 global + 140 partial + 10 formant)
-        all_components = [sample_rate, duration, num_partials, num_formants] + partial_components + formant_components
+        # All components for updates
+        all_components = ([sample_rate, duration, num_partials, num_formants, 
+                          vocal_style, inharmonicity, global_sweep_rate, 
+                          global_trill_rate, noise_level] + 
+                         partial_components + formant_components)
         
         # Export functionality
         def handle_export(*args):
@@ -778,7 +1117,7 @@ def create_synthesis_interface():
         
         # Auto-synthesize on any parameter change
         def setup_auto_synthesis():
-            for component in [sample_rate, duration, num_partials, num_formants] + partial_components + formant_components:
+            for component in all_inputs:
                 component.change(
                     fn=synthesize_audio,
                     inputs=all_inputs,
@@ -792,7 +1131,7 @@ def create_synthesis_interface():
 
 def create_interface():
     """Create the main interface with tabs"""
-    with gr.Blocks(title="Additive Vocal Synthesis Suite", css=".gradio-container {max-width: none !important}") as demo:
+    with gr.Blocks(title="Additive Vocal Synthesis", css=".gradio-container {max-width: none !important}") as demo:
         
         with gr.Tabs():
             with gr.Tab("Synthesis"):
