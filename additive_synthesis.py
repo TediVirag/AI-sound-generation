@@ -55,7 +55,7 @@ def envelope(t, attack_ms, decay_ms, total_ms):
 def get_default_frequency(partial_idx):
     """Calculate default frequency for a partial, ensuring it stays within bounds"""
     base_freq = 220 * (partial_idx + 1)
-    return min(base_freq, 2000)  # Cap at 2000 Hz maximum
+    return min(base_freq, 15000)  # Cap at 15000 Hz maximum
 
 def synthesize_single_sound(parameters):
     """Synthesize a single sound from parameters dictionary"""
@@ -270,7 +270,7 @@ def create_concatenation_interface():
                 ax.set_ylabel('Frequency [Hz]')
                 ax.set_xlabel('Time [sec]')
                 ax.set_title('Concatenated Audio Spectrogram')
-                ax.set_ylim(0, 10000)
+                ax.set_ylim(0, 15000)
                 ax.legend()
                 
                 total_duration = len(audio_int16) / sample_rate
@@ -511,7 +511,7 @@ def synthesize_audio(sample_rate_idx, duration, num_partials, num_formants,
         ax.set_ylabel('Frequency [Hz]')
         ax.set_xlabel('Time [sec]')
         ax.set_title('Spectrogram (with Dominant Frequency)')
-        ax.set_ylim(0, 10000)
+        ax.set_ylim(0, 15000)
         ax.legend()
         
         tick_interval = 0.25
@@ -622,7 +622,7 @@ def create_synthesis_interface():
                         
                         freq = gr.Slider(
                             minimum=50,
-                            maximum=10000,
+                            maximum=15000,
                             value=get_default_frequency(partial_idx),
                             step=10,
                             label=f"Frequency (Hz)"
@@ -691,7 +691,7 @@ def create_synthesis_interface():
                     gr.Markdown(f"**Formant {i + 1}**")
                     f_freq = gr.Slider(
                         minimum=200,
-                        maximum=8000,
+                        maximum=15000,
                         value=500 + 500 * i,
                         step=10,
                         label=f"Frequency (Hz)"
