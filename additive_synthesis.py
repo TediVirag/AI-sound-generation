@@ -945,7 +945,7 @@ def create_synthesis_interface():
                         )
                         decay = gr.Slider(
                             minimum=10,
-                            maximum=2000,
+                            maximum=3000,
                             value=200,
                             step=5,
                             label=f"Decay (ms)"
@@ -953,7 +953,7 @@ def create_synthesis_interface():
                         vibrato = gr.Checkbox(label="Vibrato", value=False)
                         vib_rate = gr.Slider(
                             minimum=0,
-                            maximum=40,
+                            maximum=100,
                             value=5,
                             step=1,
                             label="Vib Rate",
@@ -961,7 +961,7 @@ def create_synthesis_interface():
                         )
                         vib_depth = gr.Slider(
                             minimum=0,
-                            maximum=300,
+                            maximum=500,
                             value=20,
                             step=1,
                             label="Vib Depth (Hz)",
