@@ -356,8 +356,8 @@ def process_directory(input_dir, output_dir):
     
     return success_count == total_count
 
-def create_example_concatenation_json(output_path="example_concatenation.json"):
-    """Create an example JSON file showing concatenation format"""
+def create_example_json(output_path="example.json"):
+    """Create an example JSON file showing format"""
     example = {
         "concatenation": {
             "sound_files": [
@@ -420,12 +420,12 @@ def main():
     parser = argparse.ArgumentParser(description='Audio Synthesis CLI Tool')
     parser.add_argument('input_dir', help='Directory containing input JSON files')
     parser.add_argument('output_dir', help='Directory for output WAV files')
-    parser.add_argument('--create-example', action='store_true', help='Create an example concatenation JSON file')
+    parser.add_argument('--create-example', action='store_true', help='Create an example JSON file')
     
     args = parser.parse_args()
     
     if args.create_example:
-        create_example_concatenation_json()
+        create_example_json()
         return
     
     success = process_directory(args.input_dir, args.output_dir)
