@@ -4,8 +4,8 @@ This repository contains interactive apps for additive sound synthesis and sound
 
 - **additive_synthesis.py**: A Gradio app that allows mixing multiple sine waves together (additive synthesis) and concatenating up to 6 different sounds.
 - **sound_test.py**: A Streamlit app for creating sound with a greater variety of parameters, but can't mix multiple sine waves.
-- **audio_synthesis_tool.py**: A command-line batch synthesizer for processing multiple JSON parameter files recursively in a file structure.
-- **file_processor.py**: A utility for batch file processing with unique ID generation and pairing documentation. Useful for testing results on participants.
+- **batch_synthesizer.py**: A command-line batch synthesizer for processing multiple JSON parameter files recursively in a file structure.
+- **test_file_processor.py**: A utility for batch file processing with unique ID generation and pairing documentation. Useful for testing results on participants.
 
 Both interactive apps can be run independently using Docker and support importing/exporting parameter presets for creating realistic bird sounds and other complex audio.
 
