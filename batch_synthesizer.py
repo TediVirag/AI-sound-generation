@@ -301,9 +301,46 @@ def process_concatenation_json(parameters, output_path):
         print(f"Error processing {output_path}: {str(e)}")
         return False
 
-def process_single_json(json_path, output_dir):
-    """Process a single JSON file and create corresponding WAV file(s)"""
+def find_json_files_recursive(input_dir):
+    """Recursively find all JSON files in the input directory"""
+    input_path = Path(input_dir)
+    json_files = []
+    
     try:
+        # Use rglob for recursive globbing
+        for json_file in input_path.rglob("*.json"):
+            if json_file.is_file():
+                json_files.append(json_file)
+    except Exception as e:
+        print(f"Error scanning directory {input_dir}: {str(e)}")
+        return []
+    
+    return sorted(json_files)
+
+def get_relative_output_path(json_file_path, input_dir, output_dir):
+    """Calculate the corresponding output path maintaining directory structure"""
+    input_path = Path(input_dir).resolve()
+    json_path = Path(json_file_path).resolve()
+    output_path = Path(output_dir).resolve()
+    
+    # Get the relative path from input_dir to the json file
+    try:
+        relative_path = json_path.relative_to(input_path)
+        # Change the extension from .json to .wav
+        output_relative_path = relative_path.with_suffix('.wav')
+        # Combine with output directory
+        final_output_path = output_path / output_relative_path
+        return final_output_path
+    except ValueError:
+        # If json_file is not under input_dir, just use the filename
+        return output_path / f"{json_path.stem}.wav"
+
+def process_single_json(json_path, output_path, verbose=False):
+    """Process a single JSON file and create corresponding WAV file"""
+    try:
+        if verbose:
+            print(f"Processing: {json_path}")
+        
         with open(json_path, 'r') as f:
             parameters = json.load(f)
         
@@ -312,17 +349,24 @@ def process_single_json(json_path, output_dir):
             print(f"Error: {json_path} - Only concatenation format is supported")
             return False
         
-        json_name = Path(json_path).stem
-        output_path = Path(output_dir) / f"{json_name}.wav"
+        # Create output directory if it doesn't exist
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        return process_concatenation_json(parameters, str(output_path))
+        success = process_concatenation_json(parameters, str(output_path))
+        
+        if success and verbose:
+            print(f"Success: Generated {output_path}")
+        elif not success:
+            print(f"Failed: Could not process {json_path}")
+        
+        return success
             
     except Exception as e:
         print(f"Error processing {json_path}: {str(e)}")
         return False
 
-def process_directory(input_dir, output_dir):
-    """Process all JSON files in the input directory"""
+def process_directory_recursive(input_dir, output_dir, verbose=False, max_depth=None):
+    """Process all JSON files recursively in the input directory"""
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     
@@ -340,20 +384,49 @@ def process_directory(input_dir, output_dir):
         print(f"Error creating output directory '{output_dir}': {str(e)}")
         return False
     
-    json_files = list(input_path.glob("*.json"))
+    # Find all JSON files recursively
+    json_files = find_json_files_recursive(input_dir)
     
     if not json_files:
+        print(f"No JSON files found in {input_dir}")
         return True
+    
+    print(f"Found {len(json_files)} JSON files to process")
     
     success_count = 0
     total_count = len(json_files)
     
-    for json_file in json_files:
-        if process_single_json(str(json_file), str(output_path)):
-            success_count += 1
+    for i, json_file in enumerate(json_files, 1):
+        # Calculate output path maintaining directory structure
+        output_file_path = get_relative_output_path(json_file, input_dir, output_dir)
         
+        if verbose:
+            print(f"[{i}/{total_count}] Processing: {json_file}")
+            print(f"              Output to: {output_file_path}")
+        
+        # Check depth limitation if specified
+        if max_depth is not None:
+            try:
+                relative_path = json_file.relative_to(Path(input_dir))
+                depth = len(relative_path.parts) - 1  # Subtract 1 for the file itself
+                if depth > max_depth:
+                    if verbose:
+                        print(f"              Skipping: Exceeds max depth {max_depth}")
+                    continue
+            except ValueError:
+                pass  # File not under input_dir, process anyway
+        
+        if process_single_json(json_file, output_file_path, verbose=False):
+            success_count += 1
+            if not verbose:
+                print(f"[{i}/{total_count}] ✓ {json_file.name} -> {output_file_path.name}")
+        else:
+            print(f"[{i}/{total_count}] ✗ Failed: {json_file}")
+        
+        # Clean up memory
         gc.collect()
     
+    print(f"\nProcessing complete: {success_count}/{total_count} files processed successfully")
     return success_count == total_count
 
 def create_example_json(output_path="example.json"):
@@ -415,12 +488,30 @@ def create_example_json(output_path="example.json"):
     
     with open(output_path, 'w') as f:
         json.dump(example, f, indent=2)
+    
+    print(f"Example JSON file created: {output_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Audio Synthesis CLI Tool')
-    parser.add_argument('input_dir', help='Directory containing input JSON files')
-    parser.add_argument('output_dir', help='Directory for output WAV files')
-    parser.add_argument('--create-example', action='store_true', help='Create an example JSON file')
+    parser = argparse.ArgumentParser(
+        description='Audio Synthesis CLI Tool with Recursive Processing',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s input_folder output_folder
+  %(prog)s input_folder output_folder --verbose
+  %(prog)s input_folder output_folder --max-depth 2
+  %(prog)s --create-example
+        """
+    )
+    
+    parser.add_argument('input_dir', nargs='?', help='Directory containing input JSON files')
+    parser.add_argument('output_dir', nargs='?', help='Directory for output WAV files')
+    parser.add_argument('--create-example', action='store_true', 
+                       help='Create an example JSON file and exit')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Enable verbose output')
+    parser.add_argument('--max-depth', type=int, metavar='N',
+                       help='Maximum recursion depth (default: unlimited)')
     
     args = parser.parse_args()
     
@@ -428,11 +519,29 @@ def main():
         create_example_json()
         return
     
-    success = process_directory(args.input_dir, args.output_dir)
+    if not args.input_dir or not args.output_dir:
+        parser.error('input_dir and output_dir are required unless using --create-example')
+    
+    print(f"Audio Synthesis Tool - Recursive Processing")
+    print(f"Input directory: {args.input_dir}")
+    print(f"Output directory: {args.output_dir}")
+    if args.max_depth is not None:
+        print(f"Maximum depth: {args.max_depth}")
+    print(f"Verbose mode: {'ON' if args.verbose else 'OFF'}")
+    print("-" * 50)
+    
+    success = process_directory_recursive(
+        args.input_dir, 
+        args.output_dir, 
+        verbose=args.verbose,
+        max_depth=args.max_depth
+    )
     
     if success:
+        print("All files processed successfully!")
         sys.exit(0)
     else:
+        print("Some files failed to process.")
         sys.exit(1)
 
 if __name__ == "__main__":
