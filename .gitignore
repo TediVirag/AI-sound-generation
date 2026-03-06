@@ -1,1 +1,3 @@
 .gradio/certificate.pem
+AI-generation/__pycache__/dataset_gen.cpython-313.pyc
+AI-generation/dataset_out/*
