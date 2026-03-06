@@ -49,11 +49,11 @@ class Config:
     # SSH jump host (bastion)
     ssh_host: str = "caesar.elte.hu"
     ssh_port: int = 22
-    ssh_username: str = ""
+    ssh_username: str = "tedivirag"
 
     # Auth: use key (recommended) or password
     ssh_pkey: Optional[str] = "/path/to/id_rsa"
-    ssh_password: Optional[str] = ""
+    ssh_password: Optional[str] = "0107LuckyV+"
 
     # DB host/port as reachable FROM the bastion
     remote_db_host: str = "pgsql.caesar.elte.hu"
@@ -61,8 +61,8 @@ class Config:
 
     # PostgreSQL credentials
     db_name: str = "p-soundgen"
-    db_user: str = ""
-    db_password: str = ""
+    db_user: str = "tedivirag"
+    db_password: str = "0107LuckyV+"
     db_sslmode: str = "prefer"
 
     # Table / column names
@@ -155,7 +155,7 @@ def _argmax(values: List[float]) -> int:
 def encode_json(sample_json: Dict[str, Any]) -> np.ndarray:
     """
     Encode the full concatenation JSON into a fixed-size float32 vector.
-    Missing sounds/partials/formants are zero-padded; extras are truncated.
+    Encodes DB values faithfully. Unused slots are zero-padded.
     """
     vector: List[float] = []
 
@@ -164,13 +164,11 @@ def encode_json(sample_json: Dict[str, Any]) -> np.ndarray:
     intervals   = concat.get("intervals", []) or []
     sounds      = [s for s in sound_files if s is not None]
 
-    # Concat-level: target sample_rate + intervals
     vector.append(_clip_norm(float(concat.get("sample_rate", 44100)), SAMPLE_RATE_MAX))
     for i in range(MAX_SOUNDS - 1):
         val = float(intervals[i]) if i < len(intervals) else 0.0
-        vector.append(_clip_norm(val, INTERVAL_MAX))
+        vector.append(_clip_norm(max(0.0, val), INTERVAL_MAX))
 
-    # Per-sound slots
     for s_idx in range(MAX_SOUNDS):
         if s_idx < len(sounds):
             sound    = sounds[s_idx]
@@ -178,55 +176,46 @@ def encode_json(sample_json: Dict[str, Any]) -> np.ndarray:
             partials = sound.get("partials", []) or []
             formants = sound.get("formants", []) or []
 
-            # Global: 12 values
-            vector.append(_clip_norm(float(g.get("sample_rate",       44100)), SAMPLE_RATE_MAX))
-            vector.append(_clip_norm(float(g.get("duration",            500)), DURATION_MAX))
-            vector.append(float(g.get("num_partials", 0)) / MAX_PARTIALS)
+            vector.append(_clip_norm(float(g.get("sample_rate",      44100)), SAMPLE_RATE_MAX))
+            vector.append(_clip_norm(float(g.get("duration",           300)), DURATION_MAX))
+            vector.append(float(g.get("num_partials", 1)) / MAX_PARTIALS)
             vector.append(float(g.get("num_formants", 0)) / MAX_FORMANTS)
             vs_id = VOCAL_STYLE_TO_ID.get(str(g.get("vocal_style", "")), 0)
-            vector.extend(_one_hot(vs_id, len(VOCAL_STYLES)))                  # 4 values
+            vector.extend(_one_hot(vs_id, len(VOCAL_STYLES)))
             vector.append(_clip_norm(float(g.get("inharmonicity",      0.1)), INHARMONICITY_MAX))
             vector.append(_clip_norm(float(g.get("global_sweep_rate",  0.5)), GLOBAL_SWEEP_MAX))
             vector.append(_clip_norm(float(g.get("global_trill_rate",   12)), GLOBAL_TRILL_MAX))
             vector.append(_clip_norm(float(g.get("noise_level",        0.02)), NOISE_LEVEL_MAX))
+
+            for p_idx in range(MAX_PARTIALS):
+                if p_idx < len(partials):
+                    p      = partials[p_idx]
+                    env_id = ENVELOPE_TO_ID.get(str(p.get("envelope_type", "exponential")), 0)
+                    vector.append(_clip_norm(float(p.get("freq",       440)), FREQ_MAX))
+                    vector.append(_clip_norm(float(p.get("amp",        0.5)), AMP_MAX))
+                    vector.append(_clip_norm(float(p.get("attack",      50)), ATTACK_MAX))
+                    vector.append(_clip_norm(float(p.get("decay",      200)), DECAY_MAX))
+                    vector.append(1.0 if bool(p.get("vibrato")) else 0.0)
+                    vector.append(_clip_norm(float(p.get("vib_rate",    5)), VIB_RATE_MAX))
+                    vector.append(_clip_norm(float(p.get("vib_depth",  20)), VIB_DEPTH_MAX))
+                    vector.append(1.0 if bool(p.get("inharmonic")) else 0.0)
+                    vector.append(_clip_norm(float(p.get("distortion",  0)), DISTORTION_MAX))
+                    vector.append(_clip_norm(float(p.get("sweep_rate",  0)), SWEEP_RATE_MAX))
+                    vector.extend(_one_hot(env_id, len(ENVELOPE_TYPES)))
+                else:
+                    vector.extend([0.0] * 13)
+
+            for f_idx in range(MAX_FORMANTS):
+                if f_idx < len(formants):
+                    f = formants[f_idx]
+                    vector.append(_clip_norm(float(f.get("freq",      800)), FREQ_MAX))
+                    vector.append(_clip_norm(float(f.get("bandwidth", 200)), FREQ_MAX))
+                else:
+                    vector.extend([0.0] * 2)
         else:
-            partials = []
-            formants = []
-            vector.extend([0.0] * 12)
-
-        # Per-partial: 13 values each
-        # Fields: freq, amp, attack, decay, vibrato, vib_rate, vib_depth,
-        #         inharmonic, distortion, sweep_rate, envelope_type (one-hot x3)
-        for p_idx in range(MAX_PARTIALS):
-            if s_idx < len(sounds) and p_idx < len(partials):
-                p = partials[p_idx]
-                vector.append(_clip_norm(float(p.get("freq",        440)), FREQ_MAX))
-                vector.append(_clip_norm(float(p.get("amp",         0.5)), AMP_MAX))
-                vector.append(_clip_norm(float(p.get("attack",       50)), ATTACK_MAX))
-                vector.append(_clip_norm(float(p.get("decay",       200)), DECAY_MAX))
-                vector.append(1.0 if bool(p.get("vibrato")) else 0.0)
-                vector.append(_clip_norm(float(p.get("vib_rate",      5)), VIB_RATE_MAX))
-                vector.append(_clip_norm(float(p.get("vib_depth",    20)), VIB_DEPTH_MAX))
-                vector.append(1.0 if bool(p.get("inharmonic")) else 0.0)
-                vector.append(_clip_norm(float(p.get("distortion",    0)), DISTORTION_MAX))
-                # sweep_rate: per-partial offset added on top of global_sweep_rate
-                vector.append(_clip_norm(float(p.get("sweep_rate",    0)), SWEEP_RATE_MAX))
-                env_id = ENVELOPE_TO_ID.get(str(p.get("envelope_type", "exponential")), 0)
-                vector.extend(_one_hot(env_id, len(ENVELOPE_TYPES)))           # 3 values
-            else:
-                vector.extend([0.0] * 13)
-
-        # Per-formant: 2 values each
-        for f_idx in range(MAX_FORMANTS):
-            if s_idx < len(sounds) and f_idx < len(formants):
-                f = formants[f_idx]
-                vector.append(_clip_norm(float(f.get("freq",      800)), FREQ_MAX))
-                vector.append(_clip_norm(float(f.get("bandwidth", 200)), FREQ_MAX))
-            else:
-                vector.extend([0.0] * 2)
+            vector.extend([0.0] * (12 + MAX_PARTIALS * 13 + MAX_FORMANTS * 2))
 
     return np.array(vector, dtype=np.float32)
-
 
 # Precomputed — used to validate loaded .npy files
 VECTOR_SIZE = (
@@ -238,7 +227,6 @@ VECTOR_SIZE = (
     )
 )
 
-
 # ---------------------------
 # Decoder: flat float32 vector -> JSON dict
 # Compatible with audio_synthesis_tool3.py
@@ -247,7 +235,7 @@ VECTOR_SIZE = (
 def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
     """
     Decode a float32 vector back into the concatenation JSON structure.
-    Output is directly usable by process_concatenation_json() in audio_synthesis_tool3.py.
+    Audio guards applied at decode time only — matches audio_synthesis_cli.py.
     """
     v   = list(vector)
     idx = 0
@@ -261,38 +249,35 @@ def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
     def take1() -> float:
         return take(1)[0]
 
-    # Concat-level
-    target_sr = round(_denorm(take1(), SAMPLE_RATE_MAX))
-    intervals = [round(_denorm(x, INTERVAL_MAX)) for x in take(MAX_SOUNDS - 1)]
+    target_sr = max(8000, round(_denorm(take1(), SAMPLE_RATE_MAX)))
+    intervals = [max(0, round(_denorm(x, INTERVAL_MAX))) for x in take(MAX_SOUNDS - 1)]
 
     sound_files = []
 
     for _ in range(MAX_SOUNDS):
-        # Global (12 values)
-        sample_rate   = round(_denorm(take1(), SAMPLE_RATE_MAX))
-        duration      = round(_denorm(take1(), DURATION_MAX))
-        num_partials  = min(MAX_PARTIALS, max(0, round(take1() * MAX_PARTIALS)))
+        sample_rate   = max(8000, round(_denorm(take1(), SAMPLE_RATE_MAX)))
+        duration      = max(10,   round(_denorm(take1(), DURATION_MAX)))
+        num_partials  = min(MAX_PARTIALS, max(1, round(take1() * MAX_PARTIALS)))
         num_formants  = min(MAX_FORMANTS, max(0, round(take1() * MAX_FORMANTS)))
         vs_oh         = take(len(VOCAL_STYLES))
         vocal_style   = VOCAL_STYLES[_argmax(vs_oh)]
-        inharmonicity = round(_denorm(take1(), INHARMONICITY_MAX), 4)
-        global_sweep  = round(_denorm(take1(), GLOBAL_SWEEP_MAX),  4)
-        global_trill  = round(_denorm(take1(), GLOBAL_TRILL_MAX),  4)
-        noise_level   = round(_denorm(take1(), NOISE_LEVEL_MAX),   4)
+        inharmonicity = max(0.0, round(_denorm(take1(), INHARMONICITY_MAX), 4))
+        global_sweep  = max(0.0, round(_denorm(take1(), GLOBAL_SWEEP_MAX),  4))
+        global_trill  = max(0.0, round(_denorm(take1(), GLOBAL_TRILL_MAX),  4))
+        noise_level   = max(0.0, round(_denorm(take1(), NOISE_LEVEL_MAX),   4))
 
-        # Always consume all partial + formant slots regardless of padding
         raw_partials = []
         for _ in range(MAX_PARTIALS):
-            freq       = round(_denorm(take1(), FREQ_MAX),       2)
-            amp        = round(_denorm(take1(), AMP_MAX),        4)
-            attack     = round(_denorm(take1(), ATTACK_MAX),     1)
-            decay      = round(_denorm(take1(), DECAY_MAX),      1)
+            freq       = max(20.0, round(_denorm(take1(), FREQ_MAX),      2))
+            amp        = max(0.01, round(_denorm(take1(), AMP_MAX),       4))
+            attack     = max(1.0,  round(_denorm(take1(), ATTACK_MAX),    1))
+            decay      = max(1.0,  round(_denorm(take1(), DECAY_MAX),     1))
             vibrato    = take1() >= 0.5
-            vib_rate   = round(_denorm(take1(), VIB_RATE_MAX),  2)
-            vib_depth  = round(_denorm(take1(), VIB_DEPTH_MAX), 2)
+            vib_rate   = max(0.0,  round(_denorm(take1(), VIB_RATE_MAX),  2))
+            vib_depth  = max(0.0,  round(_denorm(take1(), VIB_DEPTH_MAX), 2))
             inharmonic = take1() >= 0.5
-            distortion = round(_denorm(take1(), DISTORTION_MAX),4)
-            sweep_rate = round(_denorm(take1(), SWEEP_RATE_MAX), 4)
+            distortion = max(0.0,  round(_denorm(take1(), DISTORTION_MAX),4))
+            sweep_rate = max(0.0,  round(_denorm(take1(), SWEEP_RATE_MAX), 4))
             env_oh     = take(len(ENVELOPE_TYPES))
             env_type   = ENVELOPE_TYPES[_argmax(env_oh)]
             raw_partials.append((freq, amp, attack, decay, vibrato,
@@ -301,15 +286,13 @@ def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
 
         raw_formants = []
         for _ in range(MAX_FORMANTS):
-            freq      = round(_denorm(take1(), FREQ_MAX), 2)
-            bandwidth = round(_denorm(take1(), FREQ_MAX), 2)
+            freq      = max(20.0, round(_denorm(take1(), FREQ_MAX), 2))
+            bandwidth = max(10.0, round(_denorm(take1(), FREQ_MAX), 2))
             raw_formants.append((freq, bandwidth))
 
-        # Skip zero-padded sound slots
         if duration == 0:
             continue
 
-        # Build partials — matches exactly what synthesize_single_sound() reads
         partials = []
         for (freq, amp, attack, decay, vibrato,
              vib_rate, vib_depth, inharmonic,
@@ -322,15 +305,14 @@ def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
                 "attack":        attack,
                 "decay":         decay,
                 "vibrato":       vibrato,
-                "vib_rate":      vib_rate if vibrato else 0,
+                "vib_rate":      vib_rate  if vibrato else 0,
                 "vib_depth":     vib_depth if vibrato else 0,
                 "inharmonic":    inharmonic,
                 "distortion":    distortion,
-                "sweep_rate":    sweep_rate,   # p.get('sweep_rate', 0) in tool3
+                "sweep_rate":    sweep_rate,
                 "envelope_type": env_type,
             })
 
-        # Build formants — matches what synthesize_single_sound() reads
         formants = []
         for (freq, bandwidth) in raw_formants[:num_formants]:
             if freq == 0:
@@ -354,7 +336,7 @@ def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
         })
 
     n_sounds  = len(sound_files)
-    intervals = intervals[: max(0, n_sounds - 1)]
+    intervals = intervals[:max(0, n_sounds - 1)]
     order     = list(range(n_sounds))
 
     return {
@@ -365,7 +347,6 @@ def decode_vector(vector: np.ndarray) -> Dict[str, Any]:
             "sample_rate": target_sr,
         }
     }
-
 
 # ---------------------------
 # Label / strength helpers

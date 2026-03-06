@@ -2,3 +2,5 @@
 AI-generation/__pycache__/dataset_gen.cpython-313.pyc
 AI-generation/dataset_out/*
 AI-generation/generated_samples/*
+AI-generation/__pycache__/*
+AI-generation/best_sound_model.pt
