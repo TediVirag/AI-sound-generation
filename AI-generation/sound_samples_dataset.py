@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 # Import encode/decode helpers from the dataset generator
 from dataset_gen import (
@@ -44,7 +44,6 @@ DATASET_DIR  = "dataset_out"
 SPLIT: Literal["train", "val"] = "train"
 BATCH_SIZE   = 32
 NUM_WORKERS  = 0
-
 
 # ---------------------------
 # Dataset
@@ -178,6 +177,28 @@ class SoundSamplesDataset(Dataset):
                 counts[s] += 1
         return counts
 
+    def get_sampler(self, samples_per_epoch: Optional[int] = None) -> WeightedRandomSampler:
+        """
+        Returns a WeightedRandomSampler that balances emotion classes.
+
+        Args:
+            samples_per_epoch: Total samples drawn per epoch.
+                            Defaults to len(dataset) (same epoch length as unbalanced).
+                            Set to e.g. num_classes * max_class_count for a fuller epoch.
+        """
+        emotion_ids = self.x[self.indices, :6].argmax(dim=1)  # (N,)
+        class_counts = torch.bincount(emotion_ids, minlength=len(ALLOWED_EMOTIONS)).float()
+        class_weights = 1.0 / class_counts.clamp(min=1)
+        sample_weights = class_weights[emotion_ids]
+
+        if samples_per_epoch is None:
+            samples_per_epoch = len(sample_weights)
+
+        return WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=samples_per_epoch,
+            replacement=True,
+        )
 
 # ---------------------------
 # Collate (default is fine, but provided for clarity)
@@ -212,15 +233,18 @@ def main() -> None:
     print("Sample[0] decoded x:", dataset.decode_x(sample["x"]))
 
     # Round-trip: tensor -> JSON -> re-check structure
-    json_dict = dataset.decode_y(sample["y"])
-    n_sounds  = len(json_dict["concatenation"]["sound_files"])
-    print(f"Sample[0] decoded JSON: {n_sounds} sound(s)")
-    print(json.dumps(json_dict["concatenation"]["sound_files"][0]["global"], indent=2))
+    # json_dict = dataset.decode_y(sample["y"])
+    # n_sounds  = len(json_dict["concatenation"]["sound_files"])
+    # print(f"Sample[0] decoded JSON: {n_sounds} sound(s)")
+    # print(json.dumps(json_dict["concatenation"]["sound_files"][0]["global"], indent=2))
+
+    max_count = max(dataset.emotion_distribution().values())
+    sampler = dataset.get_sampler(samples_per_epoch=len(ALLOWED_EMOTIONS) * max_count)
 
     loader = DataLoader(
         dataset,
         batch_size=BATCH_SIZE,
-        shuffle=True,
+        sampler=sampler,
         num_workers=NUM_WORKERS,
         collate_fn=collate_fn,
     )
