@@ -21,6 +21,7 @@ import json
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import itertools
 
 import numpy as np
 import torch
@@ -45,7 +46,7 @@ from dataset_gen import (
 
 BATCH_SIZE       = 64
 NUM_WORKERS      = 0
-EPOCHS           = 150
+EPOCHS           = 150 # 0 epochs means training won't run only sample generation
 LEARNING_RATE    = 3e-4
 WEIGHT_DECAY     = 1e-5
 VALIDATION_SPLIT = 0.15
@@ -102,9 +103,9 @@ def build_active_mask(
     print(f"  Padding positions : {n_padding} (excluded from loss)")
     return ever_nonzero.to(device)
 
-# ───────���─────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────────
 # FiLM layer
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────────
 
 class FiLMLayer(nn.Module):
     """
@@ -237,9 +238,9 @@ class TripletDataset(Dataset):
 def triplet_collate(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
     return {k: torch.stack([s[k] for s in batch]) for k in batch[0]}
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────────
 # Train / val epoch
-# ──────────────────────────────────────���──────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────────
 
 def run_epoch(
     model:     nn.Module,
@@ -375,24 +376,28 @@ def build_x_tensor(emotion: str, strength: int) -> torch.Tensor:
 
 
 def generate_samples(model: nn.Module, device: torch.device) -> None:
-    model.eval()
+    # Use model.train() instead of model.eval() if you want Dropout 
+    # to stay active and produce variations for the exact same emotion/strength!
+    model.eval() 
+    
     out_dir = Path(SAMPLE_OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    grid: List[Tuple[str, int]] = []
-    for emotion in ALLOWED_EMOTIONS:
-        for strength in sorted(ALLOWED_STRENGTHS):
-            grid.append((emotion, strength))
-            if len(grid) >= N_SAMPLE_OUTPUTS:
-                break
-        if len(grid) >= N_SAMPLE_OUTPUTS:
-            break
+    # 1. Create the base 30 combinations (6 emotions * 5 strengths)
+    base_combos = [(e, s) for e in ALLOWED_EMOTIONS for s in sorted(ALLOWED_STRENGTHS)]
+    
+    # 2. Cycle through them until we reach N_SAMPLE_OUTPUTS (e.g., 150)
+    grid = list(itertools.islice(itertools.cycle(base_combos), N_SAMPLE_OUTPUTS))
 
     print(f"\nGenerating {len(grid)} sample JSON files → {out_dir}/\n")
 
     with torch.no_grad():
         for counter, (emotion, strength) in enumerate(grid, 1):
             x = build_x_tensor(emotion, strength).to(device)
+            
+            # Optional: Add tiny noise to the 'strength' dimension so repeated sounds are slightly unique
+            x[0, 6] += torch.randn(1).item() * 0.05 
+            
             out, _ = model(x)
             y_pred  = out.squeeze(0).cpu().numpy()
             jdict   = decode_vector(y_pred)
